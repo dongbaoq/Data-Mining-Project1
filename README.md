@@ -29,7 +29,7 @@ We processed the data as follows:
 - Removed observations with missing values in population, weather, and building area information.
 - Removed outliers in building area variables, including zero values and values exceeding 426,719.
 
-- After preprocessing, we obtained 15,257 fire incidents with 34 variables for predicting property damage costs.
+After preprocessing, we obtained 15,257 fire incidents with 34 variables for predicting property damage costs.
 
 ### Variables (Independent variables)
 
@@ -54,7 +54,13 @@ We have tried following Models :
 
 We compared 10 fold Cross Validation MSE and AIC, BIC. 
 
-<img width="701" alt="Comparison metrics" src="https://github.com/DongHyun-Park-1021/Data-Mining-Project1/Modeling/Results.png">
+<p align="center">
+  <img width="701" alt="Comparison metrics" src="./Modeling/Results1.png">
+</p>
+
+<p align="center">
+  <img width="701" alt="Comparison metrics" src="./Modeling/Results2.png">
+</p>
 
 ## Model Performance and Inference
 
