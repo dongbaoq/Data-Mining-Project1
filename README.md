@@ -4,7 +4,9 @@
 
 In this repository, I uploaded my team-project on the Seoul National University(SNU) Statistic department Data-mining course team project result. Our team project's goal was to apply the statistical methods in regression problem, and our topic is
 
-<center>**Predictive Model for Property Damage Costs Caused by Fires**</center>
+<p align="center">
+  <strong>Predictive Model for Property Damage Costs Caused by Fires</strong>
+</p>
 
 ## Proposal
 
@@ -52,7 +54,7 @@ We have tried following Models :
 
 We compared 10 fold Cross Validation MSE and AIC, BIC. 
 
-<img width="701" alt="Comparison metrics" src="https://github.com/DongHyun-Park-1021/Data-Mining-Project1/Modeling/Results">
+<img width="701" alt="Comparison metrics" src="https://github.com/DongHyun-Park-1021/Data-Mining-Project1/Modeling/Results.png">
 
 ## Model Performance and Inference
 
