@@ -1,0 +1,1485 @@
+---
+title: "Spline"
+author: "DonghyunPark"
+date: "2023-04-19"
+output: html_document
+---
+
+```{r, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(showtext)
+library(GGally)
+library(lubridate)
+library(corrplot)
+library(caret)
+library(splines)
+library(glmnet)
+library(nortest)
+
+font_add_google("Nanum Gothic", "nanum")
+showtext_auto()
+```
+
+# Data loading
+
+```{r}
+data <- read.csv("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 데이터/Dataset.csv", fileEncoding = "euc-kr")
+```
+
+# Str
+
+```{r}
+data$화재발생시_항목 <- as.factor(data$화재발생시_항목)
+data$화재발생월_항목 <- as.factor(data$화재발생월_항목)
+data <- data %>%
+  filter(연면적 <= 426719,
+         바닥면적 <= 426719,
+         지하층수 <= 10)%>%
+  filter(연면적 != 0)%>%
+  select(-계절구분명)%>%
+  mutate_if(is.character, as.factor) %>%
+  mutate(연면적 = log(연면적 + 1, base = 10), 바닥면적 = log(바닥면적 + 1, base = 10), 화재진압시간 = log(화재진압시간 + 1, base = 10), 재산피해금액 = log(재산피해금액 + 1, base = 10)) %>% 
+  select(-내국인생활인구수, -일최대인구수, -일최소인구수, -장기체류외국인인구수, -단기체류외국인인구수, -일최대이동인구수, -서울외유입인구수, -동일자치구행정동간이동인구수, -자치구간이동인구수) %>%
+  filter(시설장소대분류명 != "Other") %>%
+  filter(최초착화물대분류명 != "Other")
+  
+
+data %>% str()
+```
+
+
+# Spline modeling
+
+## 10 fold CV
+
+```{r}
+set.seed(1)
+k_fold_result <- createFolds(data$재산피해금액, k=10, list=TRUE, returnTrain = FALSE)
+```
+
+
+## Col을 연속형과 이산형으로 분류
+
+```{r}
+continuous_cols <- data %>%
+  select(-재산피해금액, -화재발생연도) %>%
+  select_if(is.numeric) %>%
+  names()
+
+factor_cols <-data %>%
+  select(-재산피해금액) %>%
+  select_if(is.factor) %>%
+  names()
+
+continuous_terms <- paste0(continuous_cols, collapse = " + ")
+factor_terms <- paste0(factor_cols, collapse = " + ")
+interaction_continuous_terms <- combn(continuous_cols, 2, FUN=function(x) paste0(x[1], ":", x[2]))
+interaction_continuous_terms <- paste0(interaction_continuous_terms, collapse=" + ")
+interaction_cont_factor_terms <- paste0(paste(factor_cols, continuous_cols, sep = ":"), collapse = " + ")
+interaction_factor_terms <- combn(factor_cols, 2, FUN=function(x) paste0(x[1], ":", x[2]))
+interaction_factor_terms <- paste0(interaction_factor_terms, collapse = " + ")
+```
+
+## MLR
+
+```{r, warning = FALSE}
+formula <- paste("재산피해금액 ~ ", factor_terms, "+", continuous_terms)
+
+Fold_MSE <- c()
+for (i in seq_along(k_fold_result)) {
+  # Iteration number
+  print(i)
+  
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  model <- lm(formula = as.formula(formula), data = train)
+  
+  # i번째 fold에 대한 결과 저장
+  Fold_MSE <- c(Fold_MSE, sum((test$재산피해금액-predict(model, test))^2)/(dim(test)[1]-dim(train)[1]+model$df.residual))
+}
+```
+
+```{r}
+mean(Fold_MSE)
+```
+
+### Adj R^2, AIC, BIC, Mallow Cp
+
+```{r}
+model <- lm(formula = as.formula(formula), data = data)
+RSS <- sum((summary(model)$residuals)^2) # Residual Sum of Squares
+
+AIC <- dim(data)[1]*log(RSS/dim(data)[1]) + 2*(summary(model)$df[1]+1)
+BIC <- dim(data)[1]*log(RSS/dim(data)[1]) + log(dim(data)[1])*(summary(model)$df[1]+1)
+
+AIC
+BIC
+summary(model)$adj.r.squared
+summary(model)$df
+```
+
+```{r}
+par(mfrow = c(2,2))
+plot(model)
+```
+
+
+## 2nd interaction added for continuous interactions MLR
+
+```{r, warning = FALSE}
+formula <- paste("재산피해금액 ~ ", factor_terms, "+", continuous_terms, "+", interaction_continuous_terms)
+
+Fold_MSE <- c()
+for (i in seq_along(k_fold_result)) {
+  # Iteration number
+  print(i)
+  
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  model <- lm(formula = as.formula(formula), data = train)
+  
+  # i번째 fold에 대한 결과 저장
+  Fold_MSE <- c(Fold_MSE, sum((test$재산피해금액-predict(model, test))^2)/(dim(test)[1]-dim(train)[1]+model$df.residual))
+}
+```
+
+```{r}
+mean(Fold_MSE)
+```
+
+### Adj R^2, AIC, BIC, Mallow Cp
+
+```{r}
+model <- lm(formula = as.formula(formula), data = data)
+RSS <- sum((summary(model)$residuals)^2) # Residual Sum of Squares
+
+AIC <- dim(data)[1]*log(RSS/dim(data)[1]) + 2*(summary(model)$df[1]+1)
+BIC <- dim(data)[1]*log(RSS/dim(data)[1]) + log(dim(data)[1])*(summary(model)$df[1]+1)
+
+AIC
+BIC
+summary(model)$adj.r.squared
+summary(model)$df
+```
+
+
+## 2nd interaction added for continuous interactions, continuous - factor interactions MLR
+
+```{r, warning = FALSE}
+formula <- paste("재산피해금액 ~ ", factor_terms, "+", continuous_terms, "+", interaction_continuous_terms, "+", interaction_cont_factor_terms)
+
+Fold_MSE <- c()
+for (i in seq_along(k_fold_result)) {
+  # Iteration number
+  print(i)
+  
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  model <- lm(formula = as.formula(formula), data = train)
+  
+  # i번째 fold에 대한 결과 저장
+  Fold_MSE <- c(Fold_MSE, sum((test$재산피해금액-predict(model, test))^2)/(dim(test)[1]-dim(train)[1]+model$df.residual))
+}
+```
+
+```{r}
+mean(Fold_MSE)
+```
+
+### Adj R^2, AIC, BIC, Mallow Cp
+
+```{r}
+model <- lm(formula = as.formula(formula), data = data)
+RSS <- sum((summary(model)$residuals)^2) # Residual Sum of Squares
+
+AIC <- dim(data)[1]*log(RSS/dim(data)[1]) + 2*(summary(model)$df[1]+1)
+BIC <- dim(data)[1]*log(RSS/dim(data)[1]) + log(dim(data)[1])*(summary(model)$df[1]+1)
+
+AIC
+BIC
+summary(model)$adj.r.squared
+summary(model)$df
+```
+
+## 2nd interaction added for all MLR
+
+Impossible to Computate.
+
+# Spline
+
+## Natural Spline of degree of many degree of freedoms on continuous
+
+```{r, warning=FALSE}
+Fold_MSE_df <- vector(mode = "list", length = 8)
+AIC <- c()
+BIC <- c()
+Adj.R.squared <- c()
+params <- c()
+
+
+for (df in 2:8){
+  print(df)
+  df_command <- paste(", df = ", df, ")")
+  spline_df_command <- paste(df_command, " + splines::ns(")
+  
+  spline_continuous_terms <- paste0(continuous_cols, collapse = spline_df_command)
+spline_continuous_terms <- paste("splines::ns(", spline_continuous_terms, df_command)
+
+  formula <- paste("재산피해금액 ~ ", factor_terms, "+ 화재발생연도 +", spline_continuous_terms)
+
+  for (i in seq_along(k_fold_result)) {
+  
+    # i번째 fold를 테스트 데이터로 사용
+    test <- data[k_fold_result[[i]], ]
+  
+    # 나머지 fold를 학습 데이터로 사용
+    train <- data[-k_fold_result[[i]], ]
+  
+    model <- lm(formula = as.formula(formula), data = train)
+  
+    # i번째 fold에 대한 결과 저장
+    Fold_MSE_df[[df]] <- c(Fold_MSE_df[[df]], sum((test$재산피해금액-predict(model, test))^2)/(dim(test)[1]-dim(train)[1]+model$df.residual))
+  }
+  
+  model <- lm(formula = as.formula(formula), data = data)
+  RSS <- sum((summary(model)$residuals)^2) # Residual Sum of Squares
+
+  AIC_model <- dim(data)[1]*log(RSS/dim(data)[1]) + 2*(summary(model)$df[1]+1)
+  BIC_model <- dim(data)[1]*log(RSS/dim(data)[1]) + log(dim(data)[1])*(summary(model)$df[1]+1)
+  
+  AIC <- c(AIC, AIC_model)
+  BIC <- c(BIC, BIC_model)
+  Adj.R.squared <- c(Adj.R.squared, summary(model)$adj.r.squared)
+  params <- c(params, summary(model)$df[1])
+  
+  print(summary(model)$df)
+}
+```
+
+```{r}
+CVMSE <- c(mean(Fold_MSE_df[[2]]), mean(Fold_MSE_df[[3]]), mean(Fold_MSE_df[[4]]), mean(Fold_MSE_df[[5]]), mean(Fold_MSE_df[[6]]), mean(Fold_MSE_df[[7]]), mean(Fold_MSE_df[[8]]))
+```
+
+### Adj R^2, AIC, BIC, Mallow Cp
+
+```{r}
+AIC
+```
+
+```{r}
+BIC
+```
+
+```{r}
+Adj.R.squared
+```
+
+```{r}
+CVMSE
+```
+
+```{r}
+params
+```
+
+
+### Plot
+
+```{r}
+df <- c(2,3,4,5,6,7,8)
+max_first  <- max(CVMSE)   # Specify max of first y axis
+max_second <- max(max(-AIC), max(-BIC)) # Specify max of second y axis
+min_first  <- min(Adj.R.squared)   # Specify min of first y axis
+min_second <- min(min(-AIC), min(-BIC)) # Specify min of second y axis
+
+# scale and shift variables calculated based on desired mins and maxes
+scale = (max_second - min_second)/(max_first - min_first)
+shift = min_first - min_second
+
+# Function to scale secondary axis
+scale_function <- function(x){
+  return ((x-min_first)*scale + min_second)
+}
+
+# Function to scale secondary variable values
+inv_scale_function <- function(x){
+  return ((x-min_second)/scale + min_first)
+}
+
+p <- as.data.frame(cbind(df, CVMSE, -AIC, -BIC, Adj.R.squared)) %>%
+  ggplot(aes(x = df))+
+  geom_point(aes(y = Adj.R.squared, color = "Adj R^2"), size = 0.5)+
+  geom_point(aes(y = inv_scale_function(V3), color = "-AIC"), size = 0.5)+
+  geom_point(aes(y = inv_scale_function(V4), color = "-BIC"), size = 0.5)+
+  geom_point(aes(y = CVMSE, color = "CVMSE"), size = 0.5)+
+  geom_line(aes(y = Adj.R.squared, color = "Adj R^2"))+
+  geom_line(aes(y = CVMSE, color = "CVMSE"))+
+  geom_line(aes(y = inv_scale_function(V3), color = "-AIC")) +
+  geom_line(aes(y = inv_scale_function(V4), color = "-BIC")) +
+  scale_y_continuous(
+    # Features of the first axis
+    name = "CVMSE, Adj R^2",
+    
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~scale_function(.), name="AIC, BIC (negative value)"),
+    n.breaks = 4
+) +
+  ggtitle("CVMSE, AIC, BIC, Adj R^2 comparison")+
+  scale_color_manual(values = c("orange1", "orange3", "grey50", "red"))+
+  theme(
+    
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    axis.title.y = element_text(color = "gray30"),
+    axis.title.y.right = element_text(color = "orange2"),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    text = element_text(size = 15, face = "bold"),
+    legend.key.size = unit(0.4, "cm"),
+    legend.text = element_text(size = 15, face = "bold")
+  )+
+  labs(colour = "Criteria")+
+  xlab("Degree of Spline")
+
+p
+
+ggsave("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 Rmd/1차 프로젝트 Visualize/Spline with no interaction plot.png", plot = p, width = 4, height = 2, dpi = 300)
+
+```
+
+
+
+
+### Natural Spline of degree of many degree of freedoms on continuous & continous term's interaction
+
+```{r, warning=FALSE}
+Fold_MSE_df <- vector(mode = "list", length = 8)
+AIC <- c()
+BIC <- c()
+Adj.R.squared <- c()
+params <- c()
+
+
+for (df in 1:8){
+  print(df)
+  df_command <- paste(", df = ", df, ")")
+  spline_df_command <- paste(df_command, " + splines::ns(")
+  
+  spline_continuous_terms <- paste0(continuous_cols, collapse = spline_df_command)
+spline_continuous_terms <- paste("splines::ns(", spline_continuous_terms, df_command)
+  spline_interaction_continuous_terms <- combn(continuous_cols, 2, FUN=function(x) paste0(x[1], "*", x[2]))
+  spline_interaction_continuous_terms <- paste0(spline_interaction_continuous_terms, collapse = spline_df_command)
+  spline_interaction_continuous_terms <- paste("splines::ns(", spline_interaction_continuous_terms, df_command)
+  
+  formula <- paste("재산피해금액 ~ ", factor_terms, "+ 화재발생연도 +", spline_continuous_terms, "+", spline_interaction_continuous_terms)
+
+  for (i in seq_along(k_fold_result)) {
+  
+    # i번째 fold를 테스트 데이터로 사용
+    test <- data[k_fold_result[[i]], ]
+  
+    # 나머지 fold를 학습 데이터로 사용
+    train <- data[-k_fold_result[[i]], ]
+  
+    model <- lm(formula = as.formula(formula), data = train)
+  
+    # i번째 fold에 대한 결과 저장
+    Fold_MSE_df[[df]] <- c(Fold_MSE_df[[df]], sum((test$재산피해금액-predict(model, test))^2)/(dim(test)[1]-dim(train)[1]+model$df.residual))
+  }
+  model <- lm(formula = as.formula(formula), data = data)
+  RSS <- sum((summary(model)$residuals)^2) # Residual Sum of Squares
+
+  AIC_model <- dim(data)[1]*log(RSS/dim(data)[1]) + 2*(summary(model)$df[1]+1)
+  BIC_model <- dim(data)[1]*log(RSS/dim(data)[1]) + log(dim(data)[1])*(summary(model)$df[1]+1)
+  
+  AIC <- c(AIC, AIC_model)
+  BIC <- c(BIC, BIC_model)
+  Adj.R.squared <- c(Adj.R.squared, summary(model)$adj.r.squared)
+  
+  print(summary(model)$df)
+  params <- c(params, summary(model)$df[1])
+}
+```
+
+
+```{r}
+CVMSE <- c(mean(Fold_MSE_df[[1]]), mean(Fold_MSE_df[[2]]), mean(Fold_MSE_df[[3]]), mean(Fold_MSE_df[[4]]), mean(Fold_MSE_df[[5]]), mean(Fold_MSE_df[[6]]), mean(Fold_MSE_df[[7]]), mean(Fold_MSE_df[[8]]))
+```
+
+### Adj R^2, AIC, BIC, Mallow Cp
+
+```{r}
+AIC
+```
+
+```{r}
+BIC
+```
+
+```{r}
+Adj.R.squared
+```
+
+```{r}
+CVMSE
+```
+
+```{r}
+params
+```
+
+
+### Plot
+
+```{r}
+df <- c(1,2,3,4, 5, 6, 7,8)
+max_first  <- max(CVMSE)   # Specify max of first y axis
+max_second <- max(max(-AIC), max(-BIC)) # Specify max of second y axis
+min_first  <- min(Adj.R.squared)   # Specify min of first y axis
+min_second <- min(min(-AIC), min(-BIC)) # Specify min of second y axis
+
+# scale and shift variables calculated based on desired mins and maxes
+scale = (max_second - min_second)/(max_first - min_first)
+shift = min_first - min_second
+
+# Function to scale secondary axis
+scale_function <- function(x){
+  return ((x-min_first)*scale + min_second)
+}
+
+# Function to scale secondary variable values
+inv_scale_function <- function(x){
+  return ((x-min_second)/scale + min_first)
+}
+
+p <- as.data.frame(cbind(df, CVMSE, -AIC, -BIC, Adj.R.squared)) %>%
+  ggplot(aes(x = df))+
+  geom_point(aes(y = Adj.R.squared, color = "Adj R^2"), size = 1)+
+  geom_point(aes(y = inv_scale_function(V3), color = "-AIC"), size = 1)+
+  geom_point(aes(y = inv_scale_function(V4), color = "-BIC"), size = 1)+
+  geom_point(aes(y = CVMSE, color = "CVMSE"), size = 1)+
+  geom_line(aes(y = Adj.R.squared, color = "Adj R^2"))+
+  geom_line(aes(y = CVMSE, color = "CVMSE"))+
+  geom_line(aes(y = inv_scale_function(V3), color = "-AIC")) +
+  geom_line(aes(y = inv_scale_function(V4), color = "-BIC")) +
+  scale_y_continuous(
+    # Features of the first axis
+    name = "CVMSE, Adj R^2",
+    
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~scale_function(.), name="AIC, BIC (negative value)"),
+    n.breaks = 4
+) +
+  ggtitle("CVMSE, AIC, BIC, Adj R^2 comparison")+
+  scale_color_manual(values = c("orange1", "orange3", "grey50", "red"))+
+  theme(
+    
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    axis.title.y = element_text(color = "gray30"),
+    axis.title.y.right = element_text(color = "orange2"),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    text = element_text(size = 15, face = "bold"),
+    legend.key.size = unit(0.4, "cm"),
+    legend.text = element_text(size = 15, face = "bold")
+  )+
+  labs(colour = "Criteria")+
+  xlab("Degree of Spline")
+
+p
+
+ggsave("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 Rmd/1차 프로젝트 Visualize/Spline with interaction plot.png", plot = p, width = 4, height = 2, dpi = 300)
+
+```
+
+
+
+### Natural Spline of degree of many degree of freedoms on continuous & continous term's interaction, interactions all added
+
+Computation So heavy. Do not get output.
+
+# Spline with Lasso
+
+```{r}
+df = 1
+grid <- 10^seq(5, -5, length = 100)
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+xyear <- data[["화재발생연도"]]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+  
+  
+CVMSE_lambda_1 <- rep(0, 100)
+  
+for(i in 1:10){
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  xspline.i <- xspline[-k_fold_result[[i]],]
+  xdummies.i <- xdummies[-k_fold_result[[i]],]
+  xspline._i <- xspline[k_fold_result[[i]],]
+  xdummies._i <- xdummies[k_fold_result[[i]],]
+  xyear.i <- xyear[-k_fold_result[[i]]]
+  xyear._i <- xyear[k_fold_result[[i]]]
+    
+  x <- cbind(xdummies.i, xspline.i, xyear.i)
+  y <- train$재산피해금액
+    
+  lasso.mod <- glmnet(x, y, alpha = 1, lambda = grid)
+  for(j in 1:100){
+    lasso.pred <- predict(lasso.mod, s = grid[j], newx = cbind(xdummies._i, xspline._i, xyear._i))
+    lasso.coef <- predict(lasso.mod, type = "coefficients", s = grid[j])
+    CVMSE_lambda_1[j] = CVMSE_lambda_1[j] + sum((lasso.pred - test$재산피해금액)^2)/(dim(test)[1] - sum(lasso.coef != 0))
+  }
+}
+
+CVMSE_lambda_1 = CVMSE_lambda_1 / 10
+
+```
+
+```{r}
+df = 2
+grid <- 10^seq(5, -5, length = 100)
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+
+xyear <- data[["화재발생연도"]]
+  
+  
+CVMSE_lambda_2 <- rep(0, 100)
+  
+for(i in 1:10){
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  xspline.i <- xspline[-k_fold_result[[i]],]
+  xdummies.i <- xdummies[-k_fold_result[[i]],]
+  xspline._i <- xspline[k_fold_result[[i]],]
+  xdummies._i <- xdummies[k_fold_result[[i]],]
+  
+  xyear.i <- xyear[-k_fold_result[[i]]]
+  xyear._i <- xyear[k_fold_result[[i]]]
+  
+    
+  x <- cbind(xdummies.i, xspline.i, xyear.i)
+  y <- train$재산피해금액
+    
+  lasso.mod <- glmnet(x, y, alpha = 1, lambda = grid)
+  for(j in 1:100){
+    lasso.pred <- predict(lasso.mod, s = grid[j], newx = cbind(xdummies._i, xspline._i, xyear._i))
+    lasso.coef <- predict(lasso.mod, type = "coefficients", s = grid[j])
+    CVMSE_lambda_2[j] = CVMSE_lambda_2[j] + sum((lasso.pred - test$재산피해금액)^2)/(dim(test)[1] - sum(lasso.coef != 0))
+  }
+}
+
+CVMSE_lambda_2 = CVMSE_lambda_2 / 10
+
+```
+
+
+```{r}
+df = 3
+grid <- 10^seq(5, -5, length = 100)
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+  
+xyear <- data[["화재발생연도"]]
+  
+CVMSE_lambda_3 <- rep(0, 100)
+  
+for(i in 1:10){
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  xspline.i <- xspline[-k_fold_result[[i]],]
+  xdummies.i <- xdummies[-k_fold_result[[i]],]
+  xspline._i <- xspline[k_fold_result[[i]],]
+  xdummies._i <- xdummies[k_fold_result[[i]],]
+  
+  xyear.i <- xyear[-k_fold_result[[i]]]
+  xyear._i <- xyear[k_fold_result[[i]]]
+    
+  x <- cbind(xdummies.i, xspline.i, xyear.i)
+  y <- train$재산피해금액
+    
+  lasso.mod <- glmnet(x, y, alpha = 1, lambda = grid)
+  for(j in 1:100){
+    lasso.pred <- predict(lasso.mod, s = grid[j], newx = cbind(xdummies._i, xspline._i, xyear._i))
+    lasso.coef <- predict(lasso.mod, type = "coefficients", s = grid[j])
+    CVMSE_lambda_3[j] = CVMSE_lambda_3[j] + sum((lasso.pred - test$재산피해금액)^2)/(dim(test)[1] - sum(lasso.coef != 0))
+  }
+}
+
+CVMSE_lambda_3 = CVMSE_lambda_3 / 10
+
+```
+
+```{r}
+df = 4
+grid <- 10^seq(5, -5, length = 100)
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+  
+xyear <- data[["화재발생연도"]]  
+
+CVMSE_lambda_4 <- rep(0, 100)
+  
+for(i in 1:10){
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  xspline.i <- xspline[-k_fold_result[[i]],]
+  xdummies.i <- xdummies[-k_fold_result[[i]],]
+  xspline._i <- xspline[k_fold_result[[i]],]
+  xdummies._i <- xdummies[k_fold_result[[i]],]
+  
+  xyear.i <- xyear[-k_fold_result[[i]]]
+  xyear._i <- xyear[k_fold_result[[i]]]
+  
+    
+  x <- cbind(xdummies.i, xspline.i, xyear.i)
+  y <- train$재산피해금액
+    
+  lasso.mod <- glmnet(x, y, alpha = 1, lambda = grid)
+  for(j in 1:100){
+    lasso.pred <- predict(lasso.mod, s = grid[j], newx = cbind(xdummies._i, xspline._i, xyear._i))
+    lasso.coef <- predict(lasso.mod, type = "coefficients", s = grid[j])
+    CVMSE_lambda_4[j] = CVMSE_lambda_4[j] + sum((lasso.pred - test$재산피해금액)^2)/(dim(test)[1] - sum(lasso.coef != 0))
+  }
+}
+
+CVMSE_lambda_4 = CVMSE_lambda_4 / 10
+
+```
+
+```{r}
+df = 5
+grid <- 10^seq(5, -5, length = 100)
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+  
+xyear <- data[["화재발생연도"]]
+  
+CVMSE_lambda_5 <- rep(0, 100)
+  
+for(i in 1:10){
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  xspline.i <- xspline[-k_fold_result[[i]],]
+  xdummies.i <- xdummies[-k_fold_result[[i]],]
+  xspline._i <- xspline[k_fold_result[[i]],]
+  xdummies._i <- xdummies[k_fold_result[[i]],]
+  
+  xyear.i <- xyear[-k_fold_result[[i]]]
+  xyear._i <- xyear[k_fold_result[[i]]]
+  
+    
+  x <- cbind(xdummies.i, xspline.i, xyear.i)
+  y <- train$재산피해금액
+    
+  lasso.mod <- glmnet(x, y, alpha = 1, lambda = grid)
+  for(j in 1:100){
+    lasso.pred <- predict(lasso.mod, s = grid[j], newx = cbind(xdummies._i, xspline._i, xyear._i))
+    lasso.coef <- predict(lasso.mod, type = "coefficients", s = grid[j])
+    CVMSE_lambda_5[j] = CVMSE_lambda_5[j] + sum((lasso.pred - test$재산피해금액)^2)/(dim(test)[1] - sum(lasso.coef != 0))
+  }
+}
+
+CVMSE_lambda_5 = CVMSE_lambda_5 / 10
+
+```
+
+```{r}
+df = 6
+grid <- 10^seq(5, -5, length = 100)
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+
+xyear <- data[["화재발생연도"]]
+  
+  
+CVMSE_lambda_6 <- rep(0, 100)
+  
+for(i in 1:10){
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  xspline.i <- xspline[-k_fold_result[[i]],]
+  xdummies.i <- xdummies[-k_fold_result[[i]],]
+  xspline._i <- xspline[k_fold_result[[i]],]
+  xdummies._i <- xdummies[k_fold_result[[i]],]
+  
+  xyear.i <- xyear[-k_fold_result[[i]]]
+  xyear._i <- xyear[k_fold_result[[i]]]
+  
+    
+  x <- cbind(xdummies.i, xspline.i, xyear.i)
+  y <- train$재산피해금액
+    
+  lasso.mod <- glmnet(x, y, alpha = 1, lambda = grid)
+  for(j in 1:100){
+    lasso.pred <- predict(lasso.mod, s = grid[j], newx = cbind(xdummies._i, xspline._i, xyear._i))
+    lasso.coef <- predict(lasso.mod, type = "coefficients", s = grid[j])
+    CVMSE_lambda_6[j] = CVMSE_lambda_6[j] + sum((lasso.pred - test$재산피해금액)^2)/(dim(test)[1] - sum(lasso.coef != 0))
+  }
+}
+
+CVMSE_lambda_6 = CVMSE_lambda_6 / 10
+
+```
+
+```{r}
+df = 7
+grid <- 10^seq(5, -5, length = 100)
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+  
+xyear <- data[["화재발생연도"]]
+  
+CVMSE_lambda_7 <- rep(0, 100)
+  
+for(i in 1:10){
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  xspline.i <- xspline[-k_fold_result[[i]],]
+  xdummies.i <- xdummies[-k_fold_result[[i]],]
+  xspline._i <- xspline[k_fold_result[[i]],]
+  xdummies._i <- xdummies[k_fold_result[[i]],]
+  
+  xyear.i <- xyear[-k_fold_result[[i]]]
+  xyear._i <- xyear[k_fold_result[[i]]]
+  
+    
+  x <- cbind(xdummies.i, xspline.i, xyear.i)
+  y <- train$재산피해금액
+    
+  lasso.mod <- glmnet(x, y, alpha = 1, lambda = grid)
+  for(j in 1:100){
+    lasso.pred <- predict(lasso.mod, s = grid[j], newx = cbind(xdummies._i, xspline._i, xyear._i))
+    lasso.coef <- predict(lasso.mod, type = "coefficients", s = grid[j])
+    CVMSE_lambda_7[j] = CVMSE_lambda_7[j] + sum((lasso.pred - test$재산피해금액)^2)/(dim(test)[1] - sum(lasso.coef != 0))
+  }
+}
+
+CVMSE_lambda_7 = CVMSE_lambda_7 / 10
+
+```
+
+```{r}
+df = 8
+grid <- 10^seq(5, -5, length = 100)
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+
+xyear<- data[["화재발생연도"]]
+  
+  
+CVMSE_lambda_8 <- rep(0, 100)
+  
+for(i in 1:10){
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  xspline.i <- xspline[-k_fold_result[[i]],]
+  xdummies.i <- xdummies[-k_fold_result[[i]],]
+  xspline._i <- xspline[k_fold_result[[i]],]
+  xdummies._i <- xdummies[k_fold_result[[i]],]
+  
+  xyear.i <- xyear[-k_fold_result[[i]]]
+  xyear._i <- xyear[k_fold_result[[i]]]
+    
+  x <- cbind(xdummies.i, xspline.i, xyear.i)
+  y <- train$재산피해금액
+    
+  lasso.mod <- glmnet(x, y, alpha = 1, lambda = grid)
+  for(j in 1:100){
+    lasso.pred <- predict(lasso.mod, s = grid[j], newx = cbind(xdummies._i, xspline._i, xyear._i))
+    lasso.coef <- predict(lasso.mod, type = "coefficients", s = grid[j])
+    CVMSE_lambda_8[j] = CVMSE_lambda_8[j] + sum((lasso.pred - test$재산피해금액)^2)/(dim(test)[1] - sum(lasso.coef != 0))
+  }
+}
+
+CVMSE_lambda_8 = CVMSE_lambda_8 / 10
+
+```
+
+
+### Find minimum lambda for each degree of freedum
+
+```{r}
+CVMSE <- as.data.frame(cbind(grid, CVMSE_lambda_1, CVMSE_lambda_2, CVMSE_lambda_3, CVMSE_lambda_4, CVMSE_lambda_5, CVMSE_lambda_6, CVMSE_lambda_7, CVMSE_lambda_8))
+
+df1_min <- CVMSE[which.min(CVMSE_lambda_1),]
+df2_min <- CVMSE[which.min(CVMSE_lambda_2),]
+df3_min <- CVMSE[which.min(CVMSE_lambda_3),]
+df4_min <- CVMSE[which.min(CVMSE_lambda_4),]
+df5_min <- CVMSE[which.min(CVMSE_lambda_5),]
+df6_min <- CVMSE[which.min(CVMSE_lambda_6),]
+df7_min <- CVMSE[which.min(CVMSE_lambda_7),]
+df8_min <- CVMSE[which.min(CVMSE_lambda_8),]
+
+p <- CVMSE%>%
+  filter(grid < 1)%>%
+  ggplot(aes(x = log(grid, base = 10)))+
+  geom_point(aes(y = CVMSE_lambda_1, color = "df 1"), size = 0.1)+
+  geom_line(aes(y = CVMSE_lambda_1, color = "df 1"), size = 0.1)+
+  geom_point(aes(y = CVMSE_lambda_2, color = "df 2"), size = 0.1)+
+  geom_line(aes(y = CVMSE_lambda_2, color = "df 2"), size = 0.1)+
+  geom_point(aes(y = CVMSE_lambda_3, color = "df 3"), size = 0.1)+
+  geom_line(aes(y = CVMSE_lambda_3, color = "df 3"), size = 0.1)+
+  geom_point(aes(y = CVMSE_lambda_4, color = "df 4"), size = 0.1)+
+  geom_line(aes(y = CVMSE_lambda_4, color = "df 4"), size = 0.1)+
+  geom_point(aes(y = CVMSE_lambda_5, color = "df 5"), size = 0.1)+
+  geom_line(aes(y = CVMSE_lambda_5, color = "df 5"), size = 0.1)+
+  geom_point(aes(y = CVMSE_lambda_6, color = "df 6"), size = 0.1)+
+  geom_line(aes(y = CVMSE_lambda_6, color = "df 6"), size = 0.1)+
+  geom_point(aes(y = CVMSE_lambda_7, color = "df 7"), size = 0.1)+
+  geom_line(aes(y = CVMSE_lambda_7, color = "df 7"), size = 0.1)+
+  geom_point(aes(y = CVMSE_lambda_8, color = "df 8"), size = 0.1)+
+  geom_line(aes(y = CVMSE_lambda_8, color = "df 8"), size = 0.1)+
+  geom_point(data = df1_min, aes(x = log(grid, base = 10), y = CVMSE_lambda_1), color = "red", size = 0.1)+
+  geom_point(data = df2_min, aes(x = log(grid, base = 10), y = CVMSE_lambda_2), color = "red", size = 0.1)+
+  geom_point(data = df3_min, aes(x = log(grid, base = 10), y = CVMSE_lambda_3), color = "red", size = 0.1)+
+  geom_point(data = df4_min, aes(x = log(grid, base = 10), y = CVMSE_lambda_4), color = "red", size = 0.1)+
+  geom_point(data = df5_min, aes(x = log(grid, base = 10), y = CVMSE_lambda_5), color = "red", size = 0.1)+
+  geom_point(data = df6_min, aes(x = log(grid, base = 10), y = CVMSE_lambda_6), color = "red", size = 0.1)+
+  geom_point(data = df7_min, aes(x = log(grid, base = 10), y = CVMSE_lambda_7), color = "red", size = 0.1)+
+  geom_point(data = df8_min, aes(x = log(grid, base = 10), y = CVMSE_lambda_8), color = "red", size = 0.1)+
+  geom_vline(xintercept = -1.767677, color = "red", size = 0.1, linetype = "dotted")+
+  geom_vline(xintercept = -1.868687, color = "red", size = 0.1, linetype = "dotted")+
+  scale_color_manual(values = c("grey1", "grey20","grey40", "grey50", "grey60", 
+                                       "grey70", "grey80", "grey90"))+
+  ggtitle("CV MSE via tuning parameter")+
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    text = element_text(size = 15, face = "bold"),
+    legend.key.size = unit(0.4, "cm"),
+    legend.text = element_text(size = 15, face = "bold"),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black")
+  )+
+  labs(colour = "Spline df")+
+  xlab("Tuning parameter lambda (log value)")+
+  ylab("CV MSE")
+
+p
+
+ggsave("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 Rmd/1차 프로젝트 Visualize/Spline Lasso tuning parameter.png", plot = p, width = 4, height = 2, dpi = 300)
+```
+
+### Adj R^2, AIC, BIC
+
+```{r}
+AIC <- c()
+BIC <- c()
+Adj.R.squared <- c()
+CVMSE <- c(df2_min[[3]], df3_min[[4]], df4_min[[5]], df5_min[[6]], df6_min[[7]], df7_min[[8]], df8_min[[9]])
+```
+
+
+```{r}
+df = 2
+bestlam = df2_min[[1]]
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+
+xyear <- data[["화재발생연도"]]
+
+x <- cbind(xdummies, xspline, xyear)
+y <- data$재산피해금액
+    
+lasso.mod <- glmnet(x, y, alpha = 1, lambda = bestlam)
+
+lasso.pred <- predict(lasso.mod, s = bestlam, newx = cbind(xdummies, xspline, xyear))
+lasso.coef <- predict(lasso.mod, type = "coefficients", s = bestlam)
+RSS <- sum((lasso.pred - data$재산피해금액)^2)
+
+AIC <- c(AIC, dim(data)[1]*log(RSS/dim(data)[1]) + 2*(sum(lasso.coef != 0)))
+BIC <- c(BIC, dim(data)[1]*log(RSS/dim(data)[1]) + log(dim(data)[1])*(sum(lasso.coef != 0)))
+
+SST <- sum((data$재산피해금액 - mean(data$재산피해금액))^2)
+Adj.R.squared <- c(Adj.R.squared, 1- RSS/SST * (dim(data)[1])/(dim(data)[1] - sum(lasso.coef != 0)))
+```
+
+```{r}
+df = 3
+bestlam = df3_min[[1]]
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+
+xyear <- data[["화재발생연도"]]
+
+x <- cbind(xdummies, xspline, xyear)
+y <- data$재산피해금액
+    
+lasso.mod <- glmnet(x, y, alpha = 1, lambda = bestlam)
+
+lasso.pred <- predict(lasso.mod, s = bestlam, newx = cbind(xdummies, xspline, xyear))
+lasso.coef <- predict(lasso.mod, type = "coefficients", s = bestlam)
+RSS <- sum((lasso.pred - data$재산피해금액)^2)
+
+AIC <- c(AIC, dim(data)[1]*log(RSS/dim(data)[1]) + 2*(sum(lasso.coef != 0)))
+BIC <- c(BIC, dim(data)[1]*log(RSS/dim(data)[1]) + log(dim(data)[1])*(sum(lasso.coef != 0)))
+
+SST <- sum((data$재산피해금액 - mean(data$재산피해금액))^2)
+Adj.R.squared <- c(Adj.R.squared, 1- RSS/SST * (dim(data)[1])/(dim(data)[1] - sum(lasso.coef != 0)))
+```
+
+```{r}
+df = 4
+bestlam = df4_min[[1]]
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+
+xyear <- data[["화재발생연도"]]
+
+x <- cbind(xdummies, xspline, xyear)
+y <- data$재산피해금액
+    
+lasso.mod <- glmnet(x, y, alpha = 1, lambda = bestlam)
+
+lasso.pred <- predict(lasso.mod, s = bestlam, newx = cbind(xdummies, xspline, xyear))
+lasso.coef <- predict(lasso.mod, type = "coefficients", s = bestlam)
+RSS <- sum((lasso.pred - data$재산피해금액)^2)
+
+AIC <- c(AIC, dim(data)[1]*log(RSS/dim(data)[1]) + 2*(sum(lasso.coef != 0)))
+BIC <- c(BIC, dim(data)[1]*log(RSS/dim(data)[1]) + log(dim(data)[1])*(sum(lasso.coef != 0)))
+
+SST <- sum((data$재산피해금액 - mean(data$재산피해금액))^2)
+Adj.R.squared <- c(Adj.R.squared, 1- RSS/SST * (dim(data)[1])/(dim(data)[1] - sum(lasso.coef != 0)))
+```
+
+```{r}
+df = 5
+bestlam = df5_min[[1]]
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+
+xyear <- data[["화재발생연도"]]
+
+x <- cbind(xdummies, xspline, xyear)
+y <- data$재산피해금액
+    
+lasso.mod <- glmnet(x, y, alpha = 1, lambda = bestlam)
+
+lasso.pred <- predict(lasso.mod, s = bestlam, newx = cbind(xdummies, xspline, xyear))
+lasso.coef <- predict(lasso.mod, type = "coefficients", s = bestlam)
+RSS <- sum((lasso.pred - data$재산피해금액)^2)
+
+AIC <- c(AIC, dim(data)[1]*log(RSS/dim(data)[1]) + 2*(sum(lasso.coef != 0)))
+BIC <- c(BIC, dim(data)[1]*log(RSS/dim(data)[1]) + log(dim(data)[1])*(sum(lasso.coef != 0)))
+
+SST <- sum((data$재산피해금액 - mean(data$재산피해금액))^2)
+Adj.R.squared <- c(Adj.R.squared, 1- RSS/SST * (dim(data)[1])/(dim(data)[1] - sum(lasso.coef != 0)))
+```
+
+```{r}
+df = 6
+bestlam = df6_min[[1]]
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+xyear <- data[["화재발생연도"]]
+
+x <- cbind(xdummies, xspline, xyear)
+y <- data$재산피해금액
+    
+lasso.mod <- glmnet(x, y, alpha = 1, lambda = bestlam)
+
+lasso.pred <- predict(lasso.mod, s = bestlam, newx = cbind(xdummies, xspline, xyear))
+lasso.coef <- predict(lasso.mod, type = "coefficients", s = bestlam)
+RSS <- sum((lasso.pred - data$재산피해금액)^2)
+
+AIC <- c(AIC, dim(data)[1]*log(RSS/dim(data)[1]) + 2*(sum(lasso.coef != 0)))
+BIC <- c(BIC, dim(data)[1]*log(RSS/dim(data)[1]) + log(dim(data)[1])*(sum(lasso.coef != 0)))
+
+SST <- sum((data$재산피해금액 - mean(data$재산피해금액))^2)
+Adj.R.squared <- c(Adj.R.squared, 1- RSS/SST * (dim(data)[1])/(dim(data)[1] - sum(lasso.coef != 0)))
+```
+
+```{r}
+df = 7
+bestlam = df7_min[[1]]
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+
+xyear <- data[["화재발생연도"]]
+
+x <- cbind(xdummies, xspline, xyear)
+y <- data$재산피해금액
+    
+lasso.mod <- glmnet(x, y, alpha = 1, lambda = bestlam)
+
+lasso.pred <- predict(lasso.mod, s = bestlam, newx = cbind(xdummies, xspline, xyear))
+lasso.coef <- predict(lasso.mod, type = "coefficients", s = bestlam)
+RSS <- sum((lasso.pred - data$재산피해금액)^2)
+
+AIC <- c(AIC, dim(data)[1]*log(RSS/dim(data)[1]) + 2*(sum(lasso.coef != 0)))
+BIC <- c(BIC, dim(data)[1]*log(RSS/dim(data)[1]) + log(dim(data)[1])*(sum(lasso.coef != 0)))
+
+SST <- sum((data$재산피해금액 - mean(data$재산피해금액))^2)
+Adj.R.squared <- c(Adj.R.squared, 1- RSS/SST * (dim(data)[1])/(dim(data)[1] - sum(lasso.coef != 0)))
+```
+
+```{r}
+df = 8
+bestlam = df8_min[[1]]
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+
+xyear <- data[["화재발생연도"]]
+
+x <- cbind(xdummies, xspline, xyear)
+y <- data$재산피해금액
+    
+lasso.mod <- glmnet(x, y, alpha = 1, lambda = bestlam)
+
+lasso.pred <- predict(lasso.mod, s = bestlam, newx = cbind(xdummies, xspline, xyear))
+lasso.coef <- predict(lasso.mod, type = "coefficients", s = bestlam)
+RSS <- sum((lasso.pred - data$재산피해금액)^2)
+
+AIC <- c(AIC, dim(data)[1]*log(RSS/dim(data)[1]) + 2*(sum(lasso.coef != 0)))
+BIC <- c(BIC, dim(data)[1]*log(RSS/dim(data)[1]) + log(dim(data)[1])*(sum(lasso.coef != 0)))
+
+SST <- sum((data$재산피해금액 - mean(data$재산피해금액))^2)
+Adj.R.squared <- c(Adj.R.squared, 1- RSS/SST * (dim(data)[1])/(dim(data)[1] - sum(lasso.coef != 0)))
+```
+
+### Plot
+
+```{r}
+df <- c(2,3,4,5,6,7,8)
+max_first  <- max(CVMSE)   # Specify max of first y axis
+max_second <- max(max(-AIC), max(-BIC)) # Specify max of second y axis
+min_first  <- min(Adj.R.squared)   # Specify min of first y axis
+min_second <- min(min(-AIC), min(-BIC)) # Specify min of second y axis
+
+# scale and shift variables calculated based on desired mins and maxes
+scale = (max_second - min_second)/(max_first - min_first)
+shift = min_first - min_second
+
+# Function to scale secondary axis
+scale_function <- function(x){
+  return ((x-min_first)*scale + min_second)
+}
+
+# Function to scale secondary variable values
+inv_scale_function <- function(x){
+  return ((x-min_second)/scale + min_first)
+}
+
+p <- as.data.frame(cbind(df, CVMSE, -AIC, -BIC, Adj.R.squared)) %>%
+  ggplot(aes(x = df))+
+  geom_point(aes(y = Adj.R.squared, color = "Adj R^2"), size = 0.5)+
+  geom_point(aes(y = inv_scale_function(V3), color = "-AIC"), size = 0.5)+
+  geom_point(aes(y = inv_scale_function(V4), color = "-BIC"), size = 0.5)+
+  geom_point(aes(y = CVMSE, color = "CVMSE"), size = 0.5)+
+  geom_line(aes(y = Adj.R.squared, color = "Adj R^2"))+
+  geom_line(aes(y = CVMSE, color = "CVMSE"))+
+  geom_line(aes(y = inv_scale_function(V3), color = "-AIC")) +
+  geom_line(aes(y = inv_scale_function(V4), color = "-BIC")) +
+  scale_y_continuous(
+    # Features of the first axis
+    name = "CVMSE, Adj R^2",
+    
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~scale_function(.), name="AIC, BIC (negative value)"),
+    n.breaks = 4
+) +
+  ggtitle("CVMSE, AIC, BIC, Adj R^2 comparison")+
+  scale_color_manual(values = c("orange1", "orange3", "grey50", "red"))+
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    axis.title.y = element_text(color = "gray30"),
+    axis.title.y.right = element_text(color = "orange2"),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    text = element_text(size = 15, face = "bold"),
+    legend.key.size = unit(0.4, "cm"),
+    legend.text = element_text(size = 15, face = "bold")
+  )+
+  labs(colour = "Criteria")+
+  xlab("Degree of Spline")
+
+p
+
+ggsave("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 Rmd/1차 프로젝트 Visualize/Spline Lasso.png", plot = p, width = 4, height = 2, dpi = 300)
+```
+
+### In degree 4
+
+```{r}
+df = 4
+bestlam = df4_min[[1]]
+
+xfactor <- data[, factor_cols, drop = FALSE]
+
+dummies <- lapply(xfactor, function(x) model.matrix(~x - 1, x))
+# combine dummy variables with original data
+xdummies <- do.call(cbind, dummies)
+  
+ 
+xcont <- data[, continuous_cols, drop = FALSE]
+xspline <- lapply(seq_along(colnames(xcont)), function(i) {
+  ns(xcont[, i], df = df)
+})
+xspline <- do.call(cbind, xspline)
+
+xyear <- data[["화재발생연도"]]
+
+x <- cbind(xdummies, xspline, xyear)
+y <- data$재산피해금액
+    
+lasso.mod <- glmnet(x, y, alpha = 1, lambda = bestlam)
+
+lasso.pred <- predict(lasso.mod, s = bestlam, newx = cbind(xdummies, xspline, xyear))
+lasso.coef <- predict(lasso.mod, type = "coefficients", s = bestlam)
+```
+
+건물 구조조 : Other, 철골조, 철근콘크리트조
+
+시간 : 1월, 5월, 0시, 5시, 12시, 19시~23시, 년도
+
+구 : 강남구, 강서구, 관악구, 광진구, 노원구, 동대문구, 서대문구, 성동구, 종로구, 중구, 중랑구
+
+발화열원 : Other, 기기 전도/복사열, 마찰/전도/복사, 미상, 불꽃/불티, 불꽃/스파크/정전기, 전기적 아크(단락)
+
+발화요인대분류: 미상, 부주의
+
+최초착화물 : 가구, 가연성 가스, 간판/치양막등, 기타, 미상, 식품, 쓰레기류, 위험물등, 침구/직물류
+
+시설장소대분류명 : 공동주택, 교육시설, 산업시설, 생활서비스
+
+화재보험의무가입대상여부 : Y
+
+바닥면적(4), 출동소요시간(2), 화재진압시간(4), 현장소방서거리(1), 시간단위기온(2), 시간단위습도(4), 총생활인구수(4)
+
+```{r}
+sum(lasso.coef != 0)
+```
+
+### Plot predict y vs y
+
+```{r}
+Fitted <- as.data.frame(cbind(lasso.pred, data$재산피해금액, data$화재진압시간))
+Fitted <- Fitted %>%
+  rename("Prediction" = "s1", "재산피해금액" = "V2", "화재진압시간" = "V3")
+
+p <- Fitted %>%
+  ggplot() +
+  geom_point(aes(x = 재산피해금액, y = Prediction, color = 화재진압시간), alpha = 0.2, size = 0.5)+
+  geom_abline(color = "red", size = 0.1)+
+  expand_limits(x = 0, y = 0)+
+  scale_colour_gradient(low = "black", high = "white")+
+  theme_bw()
+
+p
+
+ggsave("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 Rmd/1차 프로젝트 Visualize/재산피해금액_Prediction.png", plot = p, width = 4, height = 2, dpi = 300)
+```
+
+```{r}
+p <- Fitted %>%
+  ggplot()+
+  geom_point(aes(x = 화재진압시간, y = 재산피해금액), alpha = 0.05, size= 0.5)+
+  geom_point(aes(x = 화재진압시간, y = Prediction), alpha = 0.05, color = "red", size = 0.5)+
+  theme_bw()+
+  expand_limits(y = 0)+
+  ggtitle("화재진압시간과 재산피해금액")+
+  xlab("log(화재진압시간)")
+
+p
+
+ggsave("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 Rmd/1차 프로젝트 Visualize/화재진압시간-재산피해금액.png", plot = p, width = 4, height = 2, dpi = 300)
+```
+
+```{r}
+Zero_loss <- Fitted %>%
+  mutate(resid = 재산피해금액 - Prediction)%>%
+  filter(재산피해금액 == 0)
+
+ p <- Fitted %>%
+  mutate(resid = 재산피해금액 - Prediction)%>%
+  ggplot() +
+  geom_point(aes(x = Prediction, y = resid), alpha = 0.1, size = 0.5)+
+  geom_abline(slope = 0, color = "red", size = 0.1)+
+  geom_point(data = Zero_loss, aes(x = Prediction, y = resid), alpha = 0.1, color = "red", size = 0.5)+
+  theme_bw() + 
+  ggtitle("Prediction - Residual Plot")
+ 
+ p
+
+ggsave("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 Rmd/1차 프로젝트 Visualize/Prediction-Residual.png", plot = p, width = 4, height = 2, dpi = 300)
+```
+
+```{r}
+resid <- Fitted$재산피해금액 - Fitted$Prediction
+
+ad.test(resid)
+```
+
+# Comparison with GAM
+
+```{r}
+gam_result <- read.csv("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 데이터/gam.csv", fileEncoding = "UTF-8")
+
+gam_result <- gam_result %>%
+  mutate(화재진압시간 = log(화재진압시간 + 1, base = 10)) %>%
+  rename("Gam_Prediction" = "Prediction")
+
+Fitted <- Fitted %>%
+  mutate(X = row_number()) %>%
+  rename("Spline_Prediction" = "Prediction")
+
+Spline_Gam <- Fitted %>%
+  left_join(gam_result, by = c("X")) %>%
+  select("Spline_Prediction", "Gam_Prediction", "재산피해금액.x", "화재진압시간.x") %>%
+  rename("재산피해금액" = "재산피해금액.x", "화재진압시간" = "화재진압시간.x")
+```
+
+```{r}
+head(Spline_Gam)
+```
+
+## 재산피해금액 VS Prediction
+
+```{r}
+library(ggnewscale)
+
+p <- Spline_Gam %>%
+  ggplot() +
+  geom_abline(color = "black", size = 0.1)+
+  geom_point(aes(x = 재산피해금액, y = Spline_Prediction, color = 화재진압시간), alpha = 0.01, size = 0.5)+
+  scale_colour_gradientn(colors = c("blue1", "blue4"))+
+  labs(color = "Spline 화재진압시간")+
+  new_scale_color()+
+  geom_point(aes(x = 재산피해금액, y = Gam_Prediction, color = 화재진압시간), alpha = 0.01, size = 0.5)+
+  scale_colour_gradientn(colors = c("red1", "red4"))+
+  expand_limits(x = 0, y = 0)+
+  ylab("Prediction")+
+  ggtitle("재산피해금액 - Prediction")+
+  labs(color = "Gam 화재진압시간")+
+  theme_bw()
+
+p
+
+ggsave("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 Rmd/1차 프로젝트 Visualize/재산피해금액_Prediction_Spline_Lasso.png", plot = p, width = 4, height = 2, dpi = 300)
+```
+
+```{r}
+p <- Spline_Gam %>%
+  ggplot()+
+  geom_point(aes(x = 화재진압시간, y = 재산피해금액), alpha = 0.01, size= 0.5)+
+  geom_point(aes(x = 화재진압시간, y = Spline_Prediction), alpha = 0.01, color = "blue", size = 0.5)+
+  geom_point(aes(x = 화재진압시간, y = Gam_Prediction), alpha = 0.01, color = "red", size = 0.5)+
+  theme_bw()+
+  expand_limits(y = 0)+
+  ggtitle("화재진압시간과 재산피해금액")+
+  coord_cartesian(xlim = c(1, 3.5))+
+  xlab("log(화재진압시간)")
+
+p
+
+ggsave("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 Rmd/1차 프로젝트 Visualize/화재진압시간-재산피해금액_Spline_Gam.png", plot = p, width = 4, height = 2, dpi = 300)
+```

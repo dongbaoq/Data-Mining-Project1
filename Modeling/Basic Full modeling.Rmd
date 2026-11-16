@@ -1,0 +1,114 @@
+---
+title: "화재 건수 modeling"
+author: "DonghyunPark"
+date: "2023-04-14"
+output: html_document
+---
+
+# Package loading
+
+```{r}
+library(tidyverse)
+library(showtext)
+library(GGally)
+library(lubridate)
+
+font_add_google("Nanum Gothic", "nanum")
+showtext_auto()
+```
+
+# Data loading
+
+```{r}
+data <- read.csv("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 데이터/2021_서울_화재_datajoin(연별데이터_에너지추가).csv", fileEncoding = "euc-kr")
+```
+
+# Data 전처리
+
+```{r}
+unique(data$발화열원대분류)
+```
+
+```{r}
+unique(data$발화요인대분류)
+```
+```{r}
+unique(data$최초착화물대분류)
+```
+
+```{r}
+unique(data$장소대분류)
+```
+
+```{r}
+unique(data$화재유형)
+```
+
+## Transformation
+
+```{r}
+hist(log(data$재산피해소계+1))
+```
+
+```{r}
+which.max(data$재산피해소계)
+data%>%
+  filter(row_number() == 3038)
+```
+
+
+# 모델링
+
+```{r}
+temp_modeling_data <- data%>%
+  na.omit()%>%
+  filter(화재유형 == "건축,구조물")%>%
+  select(재산피해소계, 장소소분류, 최초착화물소분류, 발화요인소분류, 발화열원소분류, 시군구, 기온, 풍향, 풍속, 강수량, 습도, 요일, 시간, LNG, LPG, 총생활인구수, 흡연율, 주유소_개수, 총_연면적, 전기점검_불합격_합계, 공시지가_가중평균, 총가구수, 평균소득, commerce_building_young_per, living_building_young_per, age_20, age20_40, age40_60, commerce_per, living_per)
+  
+```
+
+```{r}
+lm <- lm(log(재산피해소계) ~. ,data = temp_modeling_data%>%filter(재산피해소계!=0)%>%select(-시군구))
+
+summary(lm)
+```
+
+```{r}
+plot(lm)
+```
+
+
+# 새로운 데이터
+
+
+```{r}
+new_data <- read.csv("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 데이터/2021_서울_화재_(데이터_에너지_전기점검)_대분류_2.csv", fileEncoding = "euc-kr")%>% select(-시도, -사망, -부상, -인명피해.명.소계) %>% mutate(hour = as.numeric(format(strptime(화재발생년월일, format = "%Y-%m-%d %H:%M"), format = "%H"))) %>% mutate(n = row_number()) %>% select(-화재발생년월일) %>% na.omit()
+```
+
+```{r}
+hist(log(new_data$재산피해소계 + 1))
+```
+
+
+```{r}
+str(new_data)
+```
+
+```{r}
+lm.fit <- lm(log(재산피해소계+1) ~ .-n, data = new_data)
+```
+
+```{r}
+summary(lm.fit)
+```
+
+```{r}
+plot(lm.fit)
+```
+
+
+
+
+
+
+

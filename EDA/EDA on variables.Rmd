@@ -1,0 +1,559 @@
+---
+title: "EDA on dataset"
+author: "DonghyunPark"
+date: "2023-04-16"
+output: html_document
+---
+
+```{r, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(showtext)
+library(GGally)
+library(lubridate)
+library(corrplot)
+
+font_add_google("Nanum Gothic", "nanum")
+showtext_auto()
+```
+
+# Data loading
+
+```{r}
+data <- read.csv("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 데이터/2021_서울_화재_(데이터_에너지_전기점검)_대분류_2.csv", fileEncoding = "euc-kr")
+```
+
+# Str for original data
+
+```{r}
+data %>% str
+```
+
+# Data 전처리
+
+## Eliminate variables
+
+시도, 인명피해.명.소계, 사망, 부상 제외, 결측치 제외
+
+```{r}
+data <- data %>%
+  dplyr::select(-"시도", -"인명피해.명.소계", -"사망", -"부상")%>%
+  na.omit()
+```
+
+## 풍향을 NSWE 좌표계로 변환
+
+```{r}
+
+```
+
+## 날짜에서 시간만 추출
+
+```{r}
+datetime <- ymd_hm(data$화재발생년월일)
+
+data <- data %>%
+  mutate(hour = hour(datetime), day = day(datetime), month = month(datetime), minute = minute(datetime)) %>%
+  select(-화재발생년월일)
+```
+
+## 최종 Colnames
+
+```{r}
+colnames(data)
+```
+
+# Exploratory Data Analysis
+
+# 재산피해 외의 변수 분석
+
+## 인구수 사이의 연관성
+
+### Construct data
+
+```{r}
+data_population <- data %>%
+  select("총생활인구수", "내국인생활인구수", "장기체류외국인인구수", "단기체류외국인인구수", "일최대인구수", "일최소인구수", "주간인구수.09.18.", "야간인구수.19.08.", "일최대이동인구수", "서울외유입인구수", "동일자치구행정동간이동인구수", "자치구간이동인구수")
+```
+
+### Correlation between variables
+
+```{r}
+corrplot(cor(data_population), method = 'number', number.cex = 0.75, order = 'hclust')
+```
+
+장기체류외국인인구수, 단기체류외국인인구수는 다른 인구 데이터와 비교했을 때 최대 0.5~0.6 정도의 상관관계를 띔. 동일자치구행정동간 이동인구수는 일최소인구수, 야간인구수, 총생활인구수, 내국인생활인구수와 0.7정도의 상관관계를 보임. 일 최소인구수, 야간인구수, 총 생활인구수, 내국인생활인구수, 일최대인구수, 주간인구수는 모두 0.9 이상의 강한 상관관계를 나타냄.
+
+```{r, message = FALSE}
+data_population %>%
+  select("일최소인구수", "야간인구수.19.08.", "총생활인구수", "내국인생활인구수", "일최대인구수", "주간인구수.09.18.")%>%
+  ggpairs()
+```
+
+
+이들 중에서도 유사한 카테고리로 판단되는 총 생활인구수, 내국인 생활인구수는 거의 1에 가까운 상관관계를 보였고, 낮에 주로 사람이 많이 돌아다니므로 주간 인구수와 일 최대 인구수 역시 강한 상관관계가 나타남. 비슷한 이유로 야간 인구수와 일 최소 인구수가 강한 상관관계를 보임.
+
+## Plot variables
+
+### 총 생활인구수 vs 내국인 생활인구수
+
+```{r}
+data_population %>%
+  select("총생활인구수", "내국인생활인구수") %>%
+  ggplot(aes(x = `총생활인구수`, y = `내국인생활인구수`))+
+  geom_point(size = 0.5)+
+  geom_abline(color = "blue")+
+  geom_smooth(color = "red")
+```
+
+### 총 생활인구수와 내국인 생활인구수는 선형 관계에 놓여있는가?
+
+```{r}
+lm_living_population.fit <- lm(내국인생활인구수 ~ 총생활인구수, data = data_population)
+summary(lm_living_population.fit)
+```
+
+Residual plot
+
+```{r}
+par(mfrow = c(2,2))
+plot(lm_living_population.fit)
+```
+
+Cluster가 되어있는 것으로 보아 각 구가 내국인 생활인구수와 총 생활인구수의 관계를 결정하는 듯 보인다.
+
+```{r}
+lm_living_population.fit2 <- lm(내국인생활인구수 ~ 총생활인구수 + 총생활인구수:시군구, data = data)
+
+par(mfrow = c(2,2))
+plot(lm_living_population.fit2)
+```
+
+몇 이상치를 제외하고 잔차가 잘 fitted 된 그림이다. 즉, 구와 총 생활인구수의 interaction을 넣으면 내국인 생활인구수의 영향을 줄일 수 있음을 시사한다.
+
+### 주간인구수 vs 일 최대인구수
+
+```{r}
+data_population %>%
+  select("주간인구수.09.18.", "일최대인구수") %>%
+  ggplot(aes(x = `주간인구수.09.18.`, y = `일최대인구수`))+
+  geom_point(size = 0.5)+
+  geom_abline(color = "blue")+
+  geom_smooth(color = "red")
+```
+
+### 주간 인구수와 일 최대 인구수는 선형 관계에 놓여있는가?
+
+```{r}
+lm_max_population.fit <- lm(일최대인구수 ~ 주간인구수.09.18., data = data_population)
+summary(lm_max_population.fit)
+```
+
+Residual plot
+
+```{r}
+par(mfrow = c(2,2))
+plot(lm_max_population.fit)
+```
+
+Cluster가 되어있는 것으로 보아 각 구가 주간 인구수와 일 최대 인구수의 관계를 결정하는 듯 보인다.
+
+```{r}
+lm_max_population.fit2 <- lm(일최대인구수 ~  주간인구수.09.18. + 주간인구수.09.18.:시군구, data = data)
+
+par(mfrow = c(2,2))
+plot(lm_max_population.fit2)
+```
+
+개선된 모습이다. 그러나 완전히 효과가 사라지진 않았다. 강수량을 추가 interaction으로 넣어봤다.
+
+```{r}
+lm_max_population.fit3 <- lm(일최대인구수 ~  주간인구수.09.18. + 주간인구수.09.18.:시군구 + 주간인구수.09.18.:강수량, data = data)
+
+par(mfrow = c(2,2))
+plot(lm_max_population.fit3)
+```
+
+강수량이 원인은 아닌 것으로 보인다.
+
+
+## 가스 이용량과 전기 이용량의 관계
+
+```{r}
+data_energy <- data %>%
+  select("가스이용량", "전기이용량", "시군구")
+```
+
+### Plot 가스 이용량 vs 전기 이용량
+
+```{r}
+data_energy %>%
+  ggplot(aes(가스이용량, 전기이용량))+
+  geom_point(aes(color = 시군구), size = 0.5)+
+  geom_smooth()
+```
+
+그래프의 좌측 하단에 데이터가 많은 것을 확인하여 그 영역에 대해 그래프를 다시 그려보았다.
+
+```{r}
+data_energy %>%
+  filter(가스이용량 < 2e+08, 전기이용량 < 2e+08)%>%
+  ggplot(aes(가스이용량, 전기이용량))+
+  geom_point(aes(color = 시군구), size = 0.5)+
+  geom_smooth()
+```
+
+명확한 패턴을 찾을 수 없었다.
+
+### 화재 발생 시에서만 데이터를 수집했기에, 실제로 데이터에서 구별로 특성이 없는지, 전기이용량과 가스이용량이 서로 관련이 없는지 확인할 필요성이 있다.
+
+## 습도와 강수량의 관계 및 구의 영향 분석
+
+```{r}
+data_humidity <- data %>%
+  select(강수량, 습도, 시군구)
+```
+
+### Plot 습도 vs 강수량
+
+```{r}
+data_humidity %>%
+  ggplot(aes(강수량, 습도))+
+  geom_point(aes(color = 시군구), size = 0.5)
+
+data_humidity %>%
+  filter(강수량 != 0) %>%
+  ggplot(aes(강수량, 습도))+
+  geom_point(aes(color = 시군구), size = 0.5)
+```
+
+비가 온 날은 습도가 높다는 것을 확인할 수 있다. 그리고 강수량이 주어질 때 습도의 하한이 있다는 것도 알아낼 수 있다.
+
+# 재산피해량 분석
+
+## 재산 피해량 Outlier 분석
+
+### 재산 피해량 boxplot
+
+```{r}
+data %>%
+  ggplot()+
+  geom_boxplot(aes(x = 재산피해소계))
+```
+
+### 재산피해의 Outlier 탐색
+
+재산피해소계가 1.5*IQR 혹은 125000을 넘어가는 사건을 정리했다.
+
+```{r}
+IQR <- quantile(data$재산피해소계, 0.75) - quantile(data$재산피해소계, 0.25)
+
+data %>%
+  filter(data$재산피해소계 < median(data$재산피해소계) - 1.5*IQR | data$재산피해소계 > median(data$재산피해소계) + 1.5 * IQR) %>%
+  dim()
+```
+
+1.5 IQR 기준은 그로부터 떨어진 데이터가 너무 많았다. (3182개 obs 중에 666개였다)
+
+```{r}
+data %>%
+  filter(data$재산피해소계 > 125000)
+```
+
+## 재산 피해량의 log변환 후 분석
+
+### Log 변환 방법
+
+```{r}
+data %>%
+  filter(재산피해소계 == 0) %>%
+  dim()
+```
+
+120 건의 화재에 대해서 재산 피해량이 0이었다.
+
+```{r}
+data %>%
+  filter(재산피해소계 != 0)%>%
+  arrange(재산피해소계)%>%
+  head(5)
+```
+
+재산피해소계는 1이 최소 단위임을 확인할 수 있다. 뉴스를 종합한 결과 재산피해액이 1000원 단위로 쓰여졌음을 알 수 있었다. log 변환 시 양수가 들어가야하기 때문에 1000원은 예측하고자 하는 재산피해량에 큰 영향을 주지 않는다고 판단하여 1을 더하여 로그 변환을 진행하였다.
+
+### 이 1을 더하는 행위가 합리적인지 검토해야함.
+
+### boxplot
+
+```{r}
+data %>%
+  mutate(log_loss = log(재산피해소계+1, base = 10)) %>%
+  ggplot(aes(x = log_loss))+
+  geom_boxplot()
+```
+
+### Log 재산피해의 Outlier
+
+```{r}
+IQR <- quantile(log(data$재산피해소계+1), 0.75) - quantile(log(data$재산피해소계+1), 0.25)
+med <- quantile(log(data$재산피해소계+1), 0.5)
+
+data %>%
+  mutate(log_loss = log(재산피해소계+1, base = 10)) %>%
+  filter(log_loss < med - 1.5 * IQR | log_loss > med + 1.5 * IQR) %>%
+  dim()
+```
+
+모두 재산피해액이 0이었던 지역이었다.
+
+### Log 변환 histogram
+
+```{r}
+data %>%
+  mutate(log_loss = log(재산피해소계+1, base = 10)) %>%
+  ggplot()+
+  geom_histogram(aes(x = log_loss))
+```
+
+## BOX-COX transform
+
+### 근거
+
+Log 변환이 앞서 보았듯 0에서 문제를 일으키고, 변환 후에도 약간의 right skewed graph가 나왔기 때문에 BOX-COX transform을 고려해보게 되었다.
+
+### BOX - COX 결과 (Full model 기준) & R square 기준
+
+```{r}
+Box_Cox_R2 <- c()
+
+for(lambda1 in seq(0, 1, by = 0.1)){
+  for(lambda2 in seq(-2, 2, by = 0.1)){
+    if(lambda1 == 0){
+      next
+    }
+    if(lambda2 == 0){
+      data_lambda <- data %>%
+        mutate(transform = log(재산피해소계 + lambda1))
+    }else{
+      data_lambda <- data %>%
+        mutate(transform = ((재산피해소계 + lambda1)^lambda2 - 1 )/lambda2)
+    }
+    
+    lm_full_lambda <- lm(transform ~ .-재산피해소계, data = data_lambda)
+    
+    Box_Cox_R2 <- c(Box_Cox_R2, c(lambda1, lambda2, summary(lm_full_lambda)$r.squared))
+  }
+}
+
+as.data.frame(t(matrix(Box_Cox_R2, nrow = 3))) %>% 
+  rename("lambda1" = "V1", "lambda2" = "V2", "r.squared" = "V3") %>%
+  arrange(desc(r.squared)) %>%
+  head(5)
+```
+
+이 결과로 Box-Cox를 해보면
+
+```{r}
+data %>%
+  mutate(box_cox_재산피해 = log(재산피해소계 + 0.4)) %>%
+  ggplot()+
+  geom_histogram(aes(x = box_cox_재산피해))
+```
+
+### BoxCox를 따를 지 log(+1) 이라는 기준을 따를 지 생각할 필요가 있다.
+
+```{r}
+data %>%
+  mutate(box_cox_재산피해 = log(재산피해소계 + 0.4, base = 10)) %>%
+  mutate(log1_재산피해 = log(재산피해소계 + 1, base = 10)) %>%
+  ggplot()+
+  geom_density(aes(x = box_cox_재산피해), color = "red")+
+  geom_density(aes(x = log1_재산피해), color = "blue")
+
+```
+
+## 두 Dataset
+
+```{r}
+data_Box_Cox <- data %>%
+  mutate(재산피해소계 = log(재산피해소계 + 0.4))
+data_log1 <- data %>%
+  mutate(재산피해소계 = log(재산피해소계 + 1))
+```
+
+# 재산피해량과 다른 변수의 관계 분석
+
+## 화재 유형에 따른 재산피해량
+
+```{r}
+unique(data$화재유형)
+```
+
+### Boxplot
+
+```{r}
+data_log1 %>%
+  select(화재유형, 재산피해소계) %>%
+  ggplot(aes(화재유형, 재산피해소계))+
+  geom_boxplot()
+```
+
+각 화재 건수는 다음과 같다.
+
+```{r}
+data_log1 %>%
+  select(화재유형, 재산피해소계) %>%
+  group_by(화재유형) %>%
+  summarise(n = n(), mean = mean(재산피해소계))
+```
+
+대다수가 건축, 구조물에서 발생한 화재이다.
+
+### Lack of fit test
+
+```{r}
+model <- lm(재산피해소계 ~ 화재유형, data = data_log1)
+
+null_model <- lm(재산피해소계 ~ 1, data = data_log1)
+
+anova(model, null_model)
+```
+
+전체 모델에 대해서는 모르지만, 이 카테고리 변수에 대해서는 회귀 분석을 하는 것이 옳다.
+
+## 화재 발생 시간과 재산피해량
+
+```{r}
+par(mfrow = c(2,2))
+
+plot(data$month, data$재산피해소계)
+plot(data$day, data$재산피해소계)
+plot(data$hour, data$재산피해소계)
+plot(data$minute, data$재산피해소계)
+```
+
+### Lack of fit test
+
+```{r}
+model <- lm(재산피해소계 ~ month, data = data_log1)
+
+null_model <- lm(재산피해소계 ~ 1, data = data_log1)
+
+anova(model, null_model)
+```
+
+월 기준으로는 그리 유효하지 않았다.
+
+```{r}
+model <- lm(재산피해소계 ~ day, data = data_log1)
+
+null_model <- lm(재산피해소계 ~ 1, data = data_log1)
+
+anova(model, null_model)
+```
+
+일 기준으로는 유효하게 나타났으며
+
+```{r}
+model <- lm(재산피해소계 ~ hour, data = data_log1)
+
+null_model <- lm(재산피해소계 ~ 1, data = data_log1)
+
+anova(model, null_model)
+```
+
+시간은 유효하게 영향을 주었다.
+
+```{r}
+model <- lm(재산피해소계 ~ minute, data = data_log1)
+
+null_model <- lm(재산피해소계 ~ 1, data = data_log1)
+
+anova(model, null_model)
+```
+
+분은 큰 영향을 주진 않다. 0.05를 유의수준으로 설정하면 유효하지 않다고 볼 수 있다.
+
+## 화재 발생 시간의 interaction term 고려 여부 : hour
+
+### Hour & Minute
+
+```{r}
+model <- lm(재산피해소계 ~ hour*minute , data = data_log1)
+
+null_model <- lm(재산피해소계 ~ hour + minute, data = data_log1)
+
+anova(model, null_model)
+```
+
+### Hour & day
+
+```{r}
+model <- lm(재산피해소계 ~ hour*day , data = data_log1)
+
+null_model <- lm(재산피해소계 ~ hour + day, data = data_log1)
+
+anova(model, null_model)
+```
+
+### 화재 발생 시각 : hour * minute + day
+
+```{r}
+time_model <- lm(재산피해소계 ~ hour*minute + day, data = data_log1)
+
+summary(time_model)
+```
+
+```{r}
+par(mfrow = c(2,2))
+plot(time_model)
+```
+
+### 화재 발생 시각 : hour + day
+
+```{r}
+time_model <- lm(재산피해소계 ~ hour + day, data = data_log1)
+
+summary(time_model)
+```
+
+```{r}
+par(mfrow = c(2,2))
+plot(time_model)
+```
+
+## 구에 따른 재산피해 차이
+
+### 구 정보
+
+```{r}
+unique(data_log1$시군구)
+```
+
+
+### Boxplot
+
+```{r}
+data_log1 %>%
+  ggplot()+
+  geom_boxplot(aes(x = 시군구, y = 재산피해소계))
+```
+
+### Lack of fit test
+
+구마다 유의미한 차이가 나타나는지 본다.
+
+```{r}
+model <- lm(재산피해소계 ~ 시군구 , data = data_log1)
+
+null_model <- lm(재산피해소계 ~ 1, data = data_log1)
+
+anova(model, null_model)
+```
+
+
+
+
+
+
+
+

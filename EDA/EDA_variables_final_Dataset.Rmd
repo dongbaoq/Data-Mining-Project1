@@ -1,0 +1,706 @@
+---
+title: "EDA on variables"
+author: "DonghyunPark"
+date: "2023-04-18"
+output: html_document
+---
+
+```{r, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(showtext)
+library(GGally)
+library(lubridate)
+library(corrplot)
+
+font_add_google("Nanum Gothic", "nanum")
+showtext_auto()
+```
+
+# Data loading
+
+```{r}
+data <- read.csv("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 데이터/화재발생피해_final.csv", fileEncoding = "euc-kr")
+```
+
+# Str for original data
+
+```{r}
+data %>% str
+```
+
+# Data 전처리
+
+
+## Eliminate some variables
+
+주제가 재산 피해액 예측이라 사망 수, 부상자 수, 사망인명피해 수는 제외시켰다.
+
+```{r}
+data <- data %>%
+  select(-"사망수", -"부상자수", -"사망인명피해수", -"화재발생시각")
+```
+
+## NA
+
+NA가 하나라도 있는 행은 1개 제외 모든 관측치가 결측이었다.
+
+결측치는 모두 제거하였다.
+
+```{r}
+data <- data %>% na.omit()
+```
+
+## 시간 변환
+
+```{r}
+data <- data %>%
+  mutate(화재진압시간 = floor(화재진압시간/10000)*60*24 + floor((화재진압시간%%10000)/100)*60 + floor(화재진압시간/100), 출동소요시간 = floor(출동소요시간/10000)*60*24 + floor((출동소요시간%%10000)/100)*60 + floor(출동소요시간/100))
+```
+
+
+## Final Colnames
+
+```{r}
+data %>%
+  colnames()
+```
+
+# Exploratory Data Analysis
+
+# 재산피해금액 추정
+
+## 요약통계량
+
+** 재산피해금액의 단위가 얼마인지 알 필요가 있음 **
+
+```{r}
+summary(data$재산피해금액)
+```
+
+
+## Box-Cox transform
+
+### 근거
+
+재산피해금액의 range가 넓고, 단위 차이가 많이 나기 때문에 Box-Cox transform을 고려해보았다.
+
+### BOX - COX 결과 (Full model 기준) & R square 기준
+
+```{r}
+Box_Cox_R2 <- c()
+
+for(lambda1 in seq(0, 1, by = 0.05)){
+  for(lambda2 in seq(-2, 2, by = 0.1)){
+    if(lambda1 == 0){
+      next
+    }
+    if(lambda2 == 0){
+      data_lambda <- data %>%
+        mutate(transform = log(재산피해금액 + lambda1))
+    }else{
+      data_lambda <- data %>%
+        mutate(transform = ((재산피해금액 + lambda1)^lambda2 - 1 )/lambda2)
+    }
+    
+    lm_full_lambda <- lm(transform ~ .-재산피해금액, data = data_lambda)
+    
+    Box_Cox_R2 <- c(Box_Cox_R2, c(lambda1, lambda2, summary(lm_full_lambda)$r.squared))
+  }
+}
+
+as.data.frame(t(matrix(Box_Cox_R2, nrow = 3))) %>% 
+  rename("lambda1" = "V1", "lambda2" = "V2", "r.squared" = "V3") %>%
+  arrange(desc(r.squared)) %>%
+  head(5)
+```
+
+### Log 변환
+
+Box-Cox에서 lambda2 = 0일 때 시행하는 log 변환에서 best lambda1값이 얼마일 지 찾아보았다.
+
+```{r}
+as.data.frame(t(matrix(Box_Cox_R2, nrow = 3))) %>% 
+  rename("lambda1" = "V1", "lambda2" = "V2", "r.squared" = "V3") %>%
+  filter(lambda2 == 0) %>%
+  arrange(desc(r.squared)) %>%
+  head(3)
+```
+
+### BOX - COX 결과 (Full model 기준) & 1 to 100
+
+```{r}
+for(lambda1 in seq(1, 100, by = 1)){
+  for(lambda2 in seq(-2, 2, by = 0.1)){
+    if(lambda1 == 0){
+      next
+    }
+    if(lambda2 == 0){
+      data_lambda <- data %>%
+        mutate(transform = log(재산피해금액 + lambda1))
+    }else{
+      data_lambda <- data %>%
+        mutate(transform = ((재산피해금액 + lambda1)^lambda2 - 1 )/lambda2)
+    }
+    
+    lm_full_lambda <- lm(transform ~ .-재산피해금액, data = data_lambda)
+    
+    Box_Cox_R2 <- c(Box_Cox_R2, c(lambda1, lambda2, summary(lm_full_lambda)$r.squared))
+  }
+}
+
+
+
+as.data.frame(t(matrix(Box_Cox_R2, nrow = 3))) %>% 
+  rename("lambda1" = "V1", "lambda2" = "V2", "r.squared" = "V3") %>%
+  arrange(desc(r.squared)) %>%
+  head(5)
+```
+
+### BOX - COX 결과 (Full model 기준) & lambda2 = 0.3
+
+```{r}
+for(lambda1 in seq(1, 3, by = 0.05)){
+  data_lambda <- data %>%
+    mutate(transform = ((재산피해금액 + lambda1)^(0.3) - 1 )/0.3)
+    
+  lm_full_lambda <- lm(transform ~ .-재산피해금액, data = data_lambda)
+    
+  Box_Cox_R2 <- c(Box_Cox_R2, c(lambda1, lambda2, summary(lm_full_lambda)$r.squared))
+}
+
+as.data.frame(t(matrix(Box_Cox_R2, nrow = 3))) %>% 
+  rename("lambda1" = "V1", "lambda2" = "V2", "r.squared" = "V3") %>%
+  arrange(desc(r.squared)) %>%
+  head(5)
+```
+
+### Log 변환
+
+```{r}
+as.data.frame(t(matrix(Box_Cox_R2, nrow = 3))) %>% 
+  rename("lambda1" = "V1", "lambda2" = "V2", "r.squared" = "V3") %>%
+  filter(lambda2 == 0) %>%
+  arrange(desc(r.squared)) %>%
+  head(3)
+```
+
+
+## Plot both best Box-Cox within best Log
+
+```{r}
+q <- data %>%
+  mutate(log1_재산피해 = log(재산피해금액 + 1, base = 10), log49_재산피해 = log(재산피해금액 + 49)) %>%
+  ggplot() +
+  geom_histogram(aes(x = log1_재산피해, y = ..density..), fill = "blue", alpha = 0.5)+
+  geom_density(aes(x = log1_재산피해), color = "blue")+
+  geom_histogram(aes(x = log49_재산피해, y = ..density..), fill = "red", alpha = 0.5)+
+  geom_density(aes(x = log49_재산피해), color = "red")
+
+q
+```
+
+
+```{r}
+q <- data %>%
+  mutate(Box_Cox_재산피해 = ((재산피해금액 + 1.70)^0.3 - 1)/0.3) %>%
+  ggplot() +
+  geom_density(aes(x = Box_Cox_재산피해), color = "blue")+
+  geom_histogram(aes(x = Box_Cox_재산피해, y = ..density..), fill = "blue", alpha = 0.5)
+
+q
+```
+
+## Transform 각각에 대한 Boxplot
+
+```{r}
+par(mfrow = c(1,3))
+data %>%
+  mutate(Box_Cox_재산피해 = ((재산피해금액 + 1.70)^0.3 - 1)/0.3, log1_재산피해 = log(재산피해금액 + 1, base = 10), log49_재산피해 = log(재산피해금액 + 49)) %>%
+  ggplot()+
+  geom_boxplot(aes(x = log1_재산피해))
+
+
+data %>%
+  mutate(Box_Cox_재산피해 = ((재산피해금액 + 1.70)^0.3 - 1)/0.3, log1_재산피해 = log(재산피해금액 + 1, base = 10), log49_재산피해 = log(재산피해금액 + 49)) %>%
+  ggplot()+
+  geom_boxplot(aes(x = log49_재산피해))
+
+data %>%
+  mutate(Box_Cox_재산피해 = ((재산피해금액 + 1.70)^0.3 - 1)/0.3, log1_재산피해 = log(재산피해금액 + 1, base = 10), log49_재산피해 = log(재산피해금액 + 49)) %>%
+  ggplot()+
+  geom_boxplot(aes(x = Box_Cox_재산피해))
+```
+
+# Log(재산피해금액 + 1) 선택
+
+근거는 충분하지 않으나 EDA 상에서 진행을 위해 이렇게 선택. Skewness가 적어서 데이터간의 관계를 보기 수월할 것으로 예상
+
+```{r}
+data <- data %>%
+  mutate(재산피해금액 = log(재산피해금액 + 1))
+```
+
+
+# 건물 : 건물구조조, 지상 층수, 지하 층수, 연면적, 바닥면적, 발화층명, 그을음면적
+
+## 건물 데이터 종류
+
+### 이산형
+
+```{r}
+unique(data$건물구조조)
+unique(data$지상층수)
+unique(data$지하층수)
+unique(data$발화층명)
+unique(data$시설장소대분류명)
+```
+
+#### 건물구조조
+
+```{r}
+data %>%
+  ggplot(aes(x = 건물구조조, y = 재산피해금액))+
+  geom_boxplot()
+```
+
+```{r}
+data %>%
+  group_by(건물구조조) %>%
+  summarise(n = n())
+```
+
+
+#### 지상층수
+
+```{r}
+data %>%
+  mutate(지상층수 = cut(지상층수, 10)) %>%
+  ggplot(aes(x = 지상층수, y = 재산피해금액))+
+  geom_boxplot()
+```
+
+#### 지하층수
+
+```{r}
+data %>%
+  mutate(지하층수 = cut(지하층수, 100)) %>%
+  ggplot(aes(x = 지하층수, y = 재산피해금액))+
+  geom_boxplot()
+```
+
+#### 발화층명
+
+```{r}
+data %>%
+  mutate(발화층명 = cut(발화층명, 10)) %>%
+  ggplot(aes(x = 발화층명, y = 재산피해금액))+
+  geom_boxplot()
+```
+
+#### 시설장소대분류명
+
+```{r}
+data %>%
+  ggplot(aes(x = 시설장소대분류명, y = 재산피해금액))+
+  geom_boxplot()
+```
+
+
+### 연속형
+
+#### 연면적
+
+연면적의 경우 Outlier가 존재. 
+
+```{r}
+data%>%
+  filter(연면적 > 2e+08)
+```
+
+```{r}
+par(mfrow = c(1,2))
+data %>%
+  filter(연면적 < 2e+08)%>%
+  ggplot(aes(x = 연면적))+
+  geom_boxplot()
+
+data %>%
+  ggplot(aes(x = log(연면적 + 1)))+
+  geom_boxplot()
+```
+
+Log 변환이 더 적합할 것으로 예상.
+
+#### Plot 연면적 vs 재산피해량
+
+```{r}
+data %>%
+  mutate(연면적 = log(연면적 + 1, base = 10))%>%
+  ggplot(aes(연면적, 재산피해금액))+
+  geom_point(alpha = 0.1)+
+  geom_smooth()
+```
+
+#### 바닥면적
+
+```{r}
+data %>%
+  ggplot()+
+  geom_boxplot(aes(x = log(바닥면적 + 1, base = 10)))
+```
+
+Log 변환이 더 적합할 것으로 예상.
+
+#### Plot 연면적 vs 재산피해량
+
+```{r}
+data %>%
+  mutate(바닥면적 = log(바닥면적 + 1, base = 10))%>%
+  ggplot(aes(바닥면적, 재산피해금액))+
+  geom_point(alpha = 0.1)+
+  geom_smooth()
+```
+
+#### 연면적 vs 바닥면적
+
+```{r}
+data %>%
+  mutate(연면적 = log(연면적+1, base = 10), 바닥면적 = log(바닥면적 + 1), base = 10)%>%
+  ggplot()+
+  geom_point(aes(연면적, 바닥면적), alpha = 0.1)
+```
+
+#### 바닥면적 = 0
+
+```{r}
+data %>%
+  filter(바닥면적 == 0) %>%
+  select(건물구조조, 지상층수, 지하층수, 연면적, 시설장소대분류명)
+```
+
+바닥면적에는 결측치가 있는 것으로 보임. 0이 결측치로 입력된 것이 아닐까 추정. 연면적과 바닥면적은 유의미한 상관관계가 있기 때문에 바닥면적을 제외하고 분석하는 것이 좋아보임. 혹은 해당 데이터셋을 제외하여 분석 진행.
+
+#### 연면적 = 0
+
+```{r}
+data %>%
+  filter(연면적 == 0) %>%
+  select(건물구조조, 지상층수, 지하층수, 연면적, 시설장소대분류명)
+```
+
+연면적이 0 인 데이터도 회귀 분석의 성능을 저하시키는 요인이 될 것으로 추정
+
+
+#### 바닥면적 0 제외 시 재산 피해금액
+
+```{r}
+data %>%
+  filter(바닥면적 > 0)%>%
+  ggplot(aes(x = log(바닥면적, base = 10), y = 재산피해금액))+
+  geom_point(alpha = 0.1)+
+  geom_smooth()
+```
+
+별다른 경향성이 없어 보이고, 연면적과 바닥면적을 변수로 추가하는 것이 좋을 지는 모름
+
+#### 그을음 면적
+
+```{r}
+data %>%
+  ggplot()+
+  geom_boxplot(aes(x = log(그을음면적 + 1, base = 10)))
+```
+
+그을음면적의 중앙값이 0이다.
+
+```{r}
+summary(data$그을음면적)
+```
+
+#### 그을음 면적 > 0 이면 재산 피해량이 큰가?
+
+```{r}
+data %>%
+  mutate(그을림 = 그을음면적 > 0) %>%
+  ggplot()+
+  geom_boxplot(aes(x=그을림, y = 재산피해금액))
+```
+
+#### 그을음 면적 > 0 & 재산피해금액
+
+```{r}
+data %>%
+  filter(그을음면적 > 0) %>%
+  mutate(그을음면적 = log(그을음면적)) %>%
+  ggplot(aes(x = 그을음면적, y = 재산피해금액))+
+  geom_point(alpha = 0.1)+
+  geom_smooth()
+```
+
+Linearity도 어느정도 만족한다. 따라서 그을음면적을 변수로 추가한다면 I(그을음면적 > 0), log(그을음면적 + 1)을 사용하는 것이 좋을 것이다.
+
+### 변수간 교호작용 분석
+
+ANOVA로 하나씩 유의한 교호작용을 보았다.
+
+시설장소대분류명 + 지상층수, 지하층수, 발화층명, 건물구조조
+
+건물구조조 + 지하층수, 지상층수(*), 발화층명
+
+그을음면적 + 지하층수, 지상층수, 발화층명, 건물구조조
+
+# 건물 EDA 모델 Improvement
+
+## 변화
+
+1. 연면적, 바닥면적 로그변환, 그을음 변수 추가
+
+2. 교호작용 추가
+
+```{r}
+modeling_data <- data %>%
+  mutate(연면적 = log(연면적 + 1), 바닥면적 = log(바닥면적 + 1), 그을음 = I(그을음면적 > 0), 그을음 = log(그을음 + 1))
+
+modeling1_lm <- lm(재산피해금액 ~ ., data = modeling_data)
+modeling2_lm <- lm(재산피해금액 ~ . + 시설장소대분류명 : 지상층수 + 시설장소대분류명 : 지하층수 + 시설장소대분류명 : 발화층명 + 시설장소대분류명 : 건물구조조 + 지하층수 : 건물구조조 + 지상층수 : 건물구조조 + 발화층명 : 건물구조조 + 그을음면적 : 지하층수 + 그을음면적 : 지상층수 + 그을음면적 : 발화층명 + 그을음면적 : 건물구조조 + 시설장소대분류명 : 그을음면적 + 그을음 : 지하층수 + 그을음 : 지상층수 + 그을음 : 발화층명 + 그을음 : 건물구조조 + 시설장소대분류명 : 그을음, data = modeling_data)
+basic_lm <- lm(재산피해금액 ~ ., data = data)
+```
+
+```{r}
+summary(basic_lm)$adj.r.squared
+summary(modeling1_lm)$adj.r.squared
+summary(modeling2_lm)$adj.r.squared
+```
+
+
+# 소방서 관련 : 현장소방서거리, 현장안전센터거리, 현장소방지역대거리, 출동소요시간, 화재진압시간
+
+## 현장소방지역대거리
+
+대부분의 값이 0이다
+
+```{r}
+sum(data$현장소방지역대거리 > 0)
+```
+
+그래서 Boxplot을 그려보니
+
+```{r}
+data %>%
+  mutate(소방지역 = 현장소방지역대거리 > 0) %>%
+  ggplot(aes(x = 소방지역, y = 재산피해금액))+
+  geom_boxplot()
+```
+
+별다른 차이점을 발견하지 못했다.
+
+```{r}
+data %>%
+  filter(현장소방지역대거리 > 0)%>%
+  ggplot(aes(x = 현장소방지역대거리, y = 재산피해금액))+
+  geom_point()
+```
+
+변수에서 제외하여도 무방하다.
+
+## 현장안전센터거리
+
+```{r}
+data%>%
+  group_by(현장안전센터거리)%>%
+  summarise(n = n())
+```
+
+```{r}
+data %>%
+  mutate(현장안전센터거리 = ifelse(현장안전센터거리 > 5, 5 , 현장안전센터거리)) %>%
+  mutate(현장안전센터거리 = as.factor(현장안전센터거리))%>%
+  ggplot(aes(현장안전센터거리, 재산피해금액))+
+  geom_boxplot()
+```
+
+별다른 차이가 관측되지 않았다.
+
+### 현장소방서거리
+
+```{r}
+data%>%
+  group_by(현장소방서거리)%>%
+  summarise(n = n())
+```
+
+```{r}
+data %>%
+  mutate(현장소방서거리 = as.factor(현장소방서거리)) %>%
+  ggplot(aes(현장소방서거리, 재산피해금액))+
+  geom_boxplot()
+```
+
+소방서거리가 멀면 재산피해금액이 주로 높은 것을 확인할 수 있다.
+
+```{r}
+data %>%
+  filter(현장소방서거리 <= 13)%>%
+  ggplot(aes(현장소방서거리, 재산피해금액))+
+  geom_point(alpha = 0.1)+
+  geom_smooth()
+```
+
+#### Exponent 항 찾기
+
+```{r}
+Exponent_R2 <- c()
+
+for(lambda in seq(0, 2, by = 0.05)){
+  data_lambda <- data %>%
+        mutate(현장소방서거리 = 현장소방서거리^lambda)
+    
+  lm_full_lambda <- lm(재산피해금액 ~ ., data = data_lambda)
+    
+  Exponent_R2 <- c(Exponent_R2, c(lambda, summary(lm_full_lambda)$r.squared))
+}
+
+as.data.frame(t(matrix(Exponent_R2, nrow = 2))) %>% 
+  rename("lambda" = "V1", "r.squared" = "V2") %>%
+  arrange(desc(r.squared)) %>%
+  head(5)
+```
+
+```{r}
+as.data.frame(t(matrix(Exponent_R2, nrow = 2))) %>% 
+  rename("lambda" = "V1", "r.squared" = "V2") %>%
+  filter(lambda == 1)
+```
+
+### 출동소요시간 
+
+```{r}
+data %>%
+  filter(출동소요시간 < 2000)%>%
+  ggplot(aes(출동소요시간, 재산피해금액))+
+  geom_point(alpha = 0.1)+
+  geom_smooth()
+```
+
+재산피해금액이 0인 곳은 보면 출동소요시간이 1000 이하였다. 전체적으로 출동 소요시간이 길 수록 재산피해금액이 큰 걸 확인할 수 있다. 
+
+```{r}
+Exponent_R2 <- c()
+
+for(lambda in seq(0, 2, by = 0.05)){
+  data_lambda <- data %>%
+        mutate(출동소요시간 = 출동소요시간^lambda)
+    
+  lm_full_lambda <- lm(재산피해금액 ~ ., data = data_lambda)
+    
+  Exponent_R2 <- c(Exponent_R2, c(lambda, summary(lm_full_lambda)$r.squared))
+}
+
+as.data.frame(t(matrix(Exponent_R2, nrow = 2))) %>% 
+  rename("lambda" = "V1", "r.squared" = "V2") %>%
+  arrange(desc(r.squared)) %>%
+  head(5)
+```
+
+```{r}
+as.data.frame(t(matrix(Exponent_R2, nrow = 2))) %>% 
+  rename("lambda" = "V1", "r.squared" = "V2") %>%
+  filter(lambda == 1)
+```
+
+### 화재진압시간
+
+```{r}
+data %>%
+  ggplot(aes(화재진압시간, 재산피해금액))+
+  geom_point(alpha = 0.1)+
+  geom_smooth()
+```
+
+
+```{r}
+data %>%
+  filter(화재진압시간 < 10000)%>%
+  ggplot(aes(화재진압시간, 재산피해금액))+
+  geom_point(alpha = 0.1)+
+  geom_smooth()
+```
+
+화재 진압시간에 따라서 재산 피해금액이 명확하게 늘어난다. 반면 몇 이상치는 경향성을 따르지 않는다.
+
+```{r}
+data %>%
+  filter(화재진압시간 < 10000)%>%
+  ggplot(aes(log(화재진압시간+1, base = 10), 재산피해금액))+
+  geom_point(alpha = 0.1)+
+  geom_smooth()
+```
+
+```{r}
+data %>%
+  ggplot(aes(log(화재진압시간+1, base = 10), 재산피해금액))+
+  geom_point(alpha = 0.1)+
+  geom_smooth()
+```
+
+log를 씌워보니 어느 수준의 화재 진압시간을 넘어가면 재산피해금액이 늘어나는 것으로 보인다. 그 경계 값을 추정해보면 1000정도로, 15분이 그 경계라고 생각해볼 수 있다. 그래서 I(화재진압시간 < 900) * 화재진압시간으로 적합하는 것이 더 결과가 잘 나올 것으로 예측된다.
+
+### 출동소요시간과 현장소방서거리
+
+```{r}
+data %>%
+  ggplot(aes(현장소방서거리, 출동소요시간))+
+  geom_point(alpha = 0.1)
+```
+
+```{r}
+data %>%
+  filter(출동소요시간 < 2000 & 현장소방서거리 <= 13) %>%
+  ggplot(aes(현장소방서거리, 출동소요시간))+
+  geom_point(alpha = 0.1)+
+  geom_smooth()
+```
+
+증가하는 경향성이 있으나 별다른 특징은 없었다. 현장 소방서거리가 가까워도 출동소요시간이 긴 경우가 존재했고, 현장 소방서거리가 먼제도 출동소요시간이 짧은 경우가 존재했다.
+
+```{r, message = FALSE, warning = FALSE}
+data %>%
+  filter(출동소요시간 < 2000 & 현장소방서거리 <= 13) %>%
+  ggplot(aes(현장소방서거리, 출동소요시간))+
+  geom_point(alpha = 0.1)+
+  geom_smooth()+
+  facet_wrap(~ 시군구명, nrow = 4)
+```
+
+구에 따라 다른 듯 하다.
+
+# 소방서 EDA 모델 Improvement
+
+## 변화
+
+1. 변수 제거, Exponent 항 추가, 화재진압시간의 Threshold 넣기
+
+2. 교호작용 추가
+
+```{r}
+modeling_data <- data %>%
+  select(-현장소방지역대거리, -현장안전센터거리) %>%
+  mutate(현장소방서거리 = 현장소방서거리^1.65, 출동소요시간 = 출동소요시간^0.1, 화재진압시간 = ifelse(화재진압시간 > 900 & 화재진압시간 < 90000, 화재진압시간, 0))
+
+modeling1_lm <- lm(재산피해금액 ~ ., data = modeling_data)
+modeling2_lm <- lm(재산피해금액 ~ . + 현장소방서거리 : 출동소요시간 + 현장소방서거리 : 화재진압시간 + 출동소요시간 : 화재진압시간 + 현장소방서거리 : 출동소요시간 : 시군구명, data = modeling_data)
+basic_lm <- lm(재산피해금액 ~ ., data = data)
+```
+
+```{r}
+summary(basic_lm)$adj.r.squared
+summary(modeling1_lm)$adj.r.squared
+summary(modeling2_lm)$adj.r.squared
+```
+
+
+
+
+
+
+

@@ -1,0 +1,256 @@
+---
+title: "Spline_Scale_invariant"
+author: "DonghyunPark"
+date: "2023-04-23"
+output: html_document
+---
+
+---
+title: "Spline"
+author: "DonghyunPark"
+date: "2023-04-19"
+output: html_document
+---
+
+```{r, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(showtext)
+library(GGally)
+library(lubridate)
+library(corrplot)
+library(caret)
+library(splines)
+
+font_add_google("Nanum Gothic", "nanum")
+showtext_auto()
+```
+
+# Data loading
+
+```{r}
+data <- read.csv("/Users/donghyunpark/Documents/Seoul National University/3rd year 1st semester/Data mining/1차 프로젝트/1차 프로젝트 데이터/Dataset.csv", fileEncoding = "euc-kr")
+```
+
+# Str
+
+```{r}
+data$화재발생시_항목 <- as.factor(data$화재발생시_항목)
+data$화재발생월_항목 <- as.factor(data$화재발생월_항목)
+data <- data %>%
+  mutate_if(is.character, as.factor) %>%
+  mutate(재산피해금액 = log(재산피해금액 + 1, base = 10)) %>% 
+  select(-내국인생활인구수, -일최대인구수, -일최소인구수, -주간인구수.09.18., -야간인구수.19.08., -일최대이동인구수, -서울외유입인구수) %>%
+  filter(시설장소대분류명 != "Other") %>%
+  filter(최초착화물대분류명 != "Other")
+  
+
+data %>% str()
+```
+
+
+# Spline modeling
+
+## 10 fold CV
+
+```{r}
+set.seed(1)
+k_fold_result <- createFolds(data$재산피해금액, k=10, list=TRUE, returnTrain = FALSE)
+```
+
+
+## Col을 연속형과 이산형으로 분류
+
+```{r}
+continuous_cols <- data %>%
+  select(-재산피해금액) %>%
+  select_if(is.numeric) %>%
+  names()
+
+factor_cols <-data %>%
+  select(-재산피해금액) %>%
+  select_if(is.factor) %>%
+  names()
+
+continuous_terms <- paste0(continuous_cols, collapse = " + ")
+factor_terms <- paste0(factor_cols, collapse = " + ")
+interaction_continuous_terms <- combn(continuous_cols, 2, FUN=function(x) paste0(x[1], ":", x[2]))
+interaction_continuous_terms <- paste0(interaction_continuous_terms, collapse=" + ")
+interaction_cont_factor_terms <- paste0(paste(factor_cols, continuous_cols, sep = ":"), collapse = " + ")
+interaction_factor_terms <- combn(factor_cols, 2, FUN=function(x) paste0(x[1], ":", x[2]))
+interaction_factor_terms <- paste0(interaction_factor_terms, collapse = " + ")
+```
+
+
+## 2nd interaction added for continuous interactions MLR
+
+```{r, warning = FALSE}
+formula <- paste("재산피해금액 ~ ", factor_terms, "+", continuous_terms, "+", interaction_continuous_terms)
+
+Fold_MSE <- c()
+for (i in seq_along(k_fold_result)) {
+  # Iteration number
+  print(i)
+  
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  model <- lm(formula = as.formula(formula), data = train)
+  
+  # i번째 fold에 대한 결과 저장
+  Fold_MSE <- c(Fold_MSE, sum((test$재산피해금액-predict(model, test))^2)/(dim(test)[1]-dim(train)[1]+model$df.residual))
+  
+  print(Fold_MSE)
+}
+```
+
+```{r}
+mean(Fold_MSE)
+```
+
+## 2nd interaction added for continuous interactions, continuous - factor interactions MLR
+
+```{r, warning = FALSE}
+formula <- paste("재산피해금액 ~ ", factor_terms, "+", continuous_terms, "+", interaction_continuous_terms, "+", interaction_cont_factor_terms)
+
+Fold_MSE <- c()
+for (i in seq_along(k_fold_result)) {
+  # Iteration number
+  print(i)
+  
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  model <- lm(formula = as.formula(formula), data = train)
+  
+  # i번째 fold에 대한 결과 저장
+  Fold_MSE <- c(Fold_MSE, sum((test$재산피해금액-predict(model, test))^2)/(dim(test)[1]-dim(train)[1]+model$df.residual))
+  
+  print(Fold_MSE)
+}
+```
+
+```{r}
+mean(Fold_MSE)
+```
+
+## 2nd interaction added for all MLR
+
+```{r, warning = FALSE}
+formula <- paste("재산피해금액 ~ ", factor_terms, "+", continuous_terms, "+", interaction_continuous_terms, "+", interaction_cont_factor_terms, "+", interaction_factor_terms)
+
+Fold_MSE <- c()
+for (i in seq_along(k_fold_result)) {
+  # Iteration number
+  print(i)
+  
+  # i번째 fold를 테스트 데이터로 사용
+  test <- data[k_fold_result[[i]], ]
+  
+  # 나머지 fold를 학습 데이터로 사용
+  train <- data[-k_fold_result[[i]], ]
+  
+  model <- lm(formula = as.formula(formula), data = train)
+  
+  # i번째 fold에 대한 결과 저장
+  Fold_MSE <- c(Fold_MSE, sum((test$재산피해금액-predict(model, test))^2)/(dim(test)[1]-dim(train)[1]+model$df.residual))
+  
+  print(Fold_MSE)
+}
+```
+
+```{r}
+mean(Fold_MSE)
+```
+
+## Spline added in continous & continuous interaction terms
+
+### Natural Spline of degree of many degree of freedoms on continuous
+
+```{r, warning=FALSE}
+Fold_MSE_df <- vector(mode = "list", length = 7)
+
+
+for (df in 1:4){
+  print(df)
+  df_command <- paste(", df = ", df, ")")
+  spline_df_command <- paste(df_command, " + splines::ns(")
+  
+  spline_continuous_terms <- paste0(continuous_cols, collapse = spline_df_command)
+spline_continuous_terms <- paste("splines::ns(", spline_continuous_terms, df_command)
+
+  formula <- paste("재산피해금액 ~ ", factor_terms, "+", spline_continuous_terms)
+
+  for (i in seq_along(k_fold_result)) {
+  
+    # i번째 fold를 테스트 데이터로 사용
+    test <- data[k_fold_result[[i]], ]
+  
+    # 나머지 fold를 학습 데이터로 사용
+    train <- data[-k_fold_result[[i]], ]
+  
+    model <- lm(formula = as.formula(formula), data = train)
+  
+    # i번째 fold에 대한 결과 저장
+    Fold_MSE_df[[df]] <- c(Fold_MSE_df[[df]], sum((test$재산피해금액-predict(model, test))^2)/(dim(test)[1]-dim(train)[1]+model$df.residual))
+  }
+}
+```
+
+```{r}
+mean(Fold_MSE_df[[1]])
+mean(Fold_MSE_df[[2]])
+mean(Fold_MSE_df[[3]])
+mean(Fold_MSE_df[[4]])
+```
+
+### Natural Spline of degree of many degree of freedoms on continuous & continous term's interaction
+
+```{r, warning=FALSE}
+Fold_MSE_df <- vector(mode = "list", length = 4)
+
+
+for (df in 1:4){
+  print(df)
+  df_command <- paste(", df = ", df, ")")
+  spline_df_command <- paste(df_command, " + splines::ns(")
+  
+  spline_continuous_terms <- paste0(continuous_cols, collapse = spline_df_command)
+spline_continuous_terms <- paste("splines::ns(", spline_continuous_terms, df_command)
+  spline_interaction_continuous_terms <- combn(continuous_cols, 2, FUN=function(x) paste0(x[1], "*", x[2]))
+  spline_interaction_continuous_terms <- paste0(spline_interaction_continuous_terms, collapse = spline_df_command)
+  spline_interaction_continuous_terms <- paste("splines::ns(", spline_interaction_continuous_terms, df_command)
+  
+  formula <- paste("재산피해금액 ~ ", factor_terms, "+", spline_continuous_terms, "+", spline_interaction_continuous_terms)
+
+  for (i in seq_along(k_fold_result)) {
+  
+    # i번째 fold를 테스트 데이터로 사용
+    test <- data[k_fold_result[[i]], ]
+  
+    # 나머지 fold를 학습 데이터로 사용
+    train <- data[-k_fold_result[[i]], ]
+  
+    model <- lm(formula = as.formula(formula), data = train)
+  
+    # i번째 fold에 대한 결과 저장
+    Fold_MSE_df[[df]] <- c(Fold_MSE_df[[df]], sum((test$재산피해금액-predict(model, test))^2)/(dim(test)[1]-dim(train)[1]+model$df.residual))
+  }
+}
+```
+
+```{r}
+mean(Fold_MSE_df[[1]])
+mean(Fold_MSE_df[[2]])
+mean(Fold_MSE_df[[3]])
+mean(Fold_MSE_df[[4]])
+```
+
+
+
+
